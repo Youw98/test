@@ -1,0 +1,5 @@
+# GreenLight-Gym2 worker environment.
+#
+# Kept separate from KasFlex core on purpose: gl-gym is AGPL-3.0-or-later and pins
+# numpy<2.0, while power-grid-model requires numpy>=2.0. See docs/DECISIONS.md.
+gl-gym==0.3.2

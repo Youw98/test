@@ -1,0 +1,36 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "KasFlex",
+  "description": "Verified agentic energy management for greenhouse horticulture under electrical constraints. An LLM planner proposes hourly energy intent, a deterministic checker verifies it against electrical, asset and crop limits, and a human approves it; the day is then simulated and compared against conventional control.",
+  "version": "0.1.0",
+  "license": "https://spdx.org/licenses/Apache-2.0",
+  "codeRepository": "https://github.com/youw98/test",
+  "programmingLanguage": "Python",
+  "runtimePlatform": "Python 3.11",
+  "developmentStatus": "active",
+  "applicationCategory": "Energy systems simulation",
+  "keywords": [
+    "agentic AI", "greenhouse horticulture", "energy management",
+    "grid congestion", "safety verification", "human oversight", "digital twin"
+  ],
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Tahir",
+      "familyName": "Abbas",
+      "email": "t.abbas@wur.nl",
+      "affiliation": { "@type": "Organization", "name": "Wageningen University & Research" }
+    }
+  ],
+  "funder": { "@type": "Organization", "name": "4TU.NIRICT" },
+  "softwareRequirements": [
+    "https://github.com/BartvLaatum/GreenLight-Gym2",
+    "https://github.com/PowerGridModel/power-grid-model"
+  ],
+  "referencePublication": {
+    "@type": "ScholarlyArticle",
+    "name": "GreenLight-Gym: Reinforcement learning benchmark environment for control of greenhouse production systems",
+    "identifier": "https://doi.org/10.1016/j.ifacol.2025.11.827"
+  }
+}
