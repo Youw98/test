@@ -26,11 +26,13 @@ to stop that happening.
 ```
 condition               runs    cost EUR  violations   hard  fallback   peak kW
 -------------------------------------------------------------------------------
-rule-based                 3    10498.15        0.00      0      0.00      5718
-ai-unverified              3    11601.63       66.00    198      0.00     10650
-ai-verified                3    10498.15        0.00      0      1.00      5718
-ai-verified-silent         3    10498.15        0.00      0      1.00      5718
-ai-verified-gap            3    10498.15        0.00      0      1.00      5718
+rule-based                 3    11561.62        0.00      0      0.00      5718
+learned                    3    10716.28        0.00      0      0.00      5650
+learned-unverified         3    10716.28        0.00      0      0.00      5650
+ai-unverified              3    12582.90       65.67    197      0.00     10650
+ai-verified                3    11561.62        0.00      0      1.00      5718
+ai-verified-silent         3    11561.62        0.00      0      1.00      5718
+ai-verified-gap            3    11561.62        0.00      0      1.00      5718
 ```
 
 Reproduce with `kasflex experiment --days 3`. These numbers are **not results**:
@@ -167,6 +169,25 @@ fake transport. What remains is real:
 *Risk:* the model produces valid JSON that is strategically poor. That is a finding,
 not a bug — acceptance criterion 5 asks for exactly one such case to be reported.
 
+### Stage 4b — Learned forecaster and optimising scheduler ✅ built
+
+Added at the project owner's request, overriding the requirements document's
+exclusion of model training (see [DECISIONS.md](DECISIONS.md) ADR-0011).
+
+- `kasflex.forecast`: feature builder, ridge regression fitted in closed form with
+  numpy, seasonal-naive baseline, rolling-origin backtest with skill scores.
+  Skill ≈ 0.55 over the naive baseline on held-out days.
+- `kasflex.controllers.scheduler`: deterministic local search over the hourly intent
+  vector, scored by the real dispatch model, seeded from the rule-based plan.
+- `--planner learned`, and two new arms in the experiment matrix.
+
+*Complete when:* the planner beats the baseline on cost without violations. **It
+does** — about 7% below the baseline in the matrix, 16% on plan-time cost over 80
+held-out days.
+
+*Caveat:* trained and measured on the surrogate greenhouse. Every number here moves
+when stage 1 lands, and the storage reserve in ADR-0012 must be re-measured then.
+
 ### Stage 5 — MPC reference ⬜
 
 Interface fixed in `controllers/mpc.py`, which raises rather than pretending. Build
@@ -217,6 +238,8 @@ now even though the stage is not.
 | R6 | Identical seed gives identical results | ✅ | `tests/test_reproducibility.py` |
 | R7 | Rule-based baseline at intent level | ✅ | `controllers/rule_based.py` |
 | R8 | MPC reference via CasADi | ⬜ stage 5 | `controllers/mpc.py` |
+| — | Demand forecasting from historical data | ✅ added | `kasflex/forecast/` |
+| — | Cost-optimising scheduler | ✅ added | `controllers/scheduler.py` |
 | R9 | AI planner, documented schema | ✅ | `controllers/llm.py`, `intent.py` |
 | R10 | Deterministic low-level controller | ✅ | worker + `dispatch.py` |
 | R11 | Three or more models by configuration | ✅ | `LlmPlanner.model` |

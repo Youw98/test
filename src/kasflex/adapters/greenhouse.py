@@ -19,7 +19,6 @@ reports. Anything richer would couple KasFlex to one particular simulator.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -122,13 +121,7 @@ class SurrogateGreenhouse:
             is_day = 6 <= intent.hour < 20
             setpoint = self.setpoint_day_c if is_day else self.setpoint_night_c
 
-            # Outdoor temperature is not carried in HourlyConditions, so it is
-            # inferred from the irradiance-driven diurnal shape. The real model
-            # takes it from the weather file; this is one of the approximations
-            # that goes away in stage 1.
-            outdoor_c = 4.0 + 6.0 * (cond.irradiance_w_m2 / 400.0) - 2.0 * math.cos(
-                math.pi * (intent.hour - 14.0) / 12.0
-            )
+            outdoor_c = cond.outdoor_temp_c
 
             loss_kw = (
                 self.heat_loss_kw_per_m2_per_k

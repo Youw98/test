@@ -63,6 +63,9 @@ class ScenarioConfig:
     """``synthetic`` or ``cache``. Never a live API call at run time (R30)."""
     winter: bool = True
     llm_model: str = "claude-opus-5"
+    history_days: int = 60
+    """Days of past operation the learned planner trains its demand forecaster on.
+    Below about 21 the lag features leave too little to fit; more is better."""
     trace_path: str = "traces/planner.jsonl"
     audit_path: str = "results/audit.jsonl"
     greenlight_scenario: dict[str, Any] = field(default_factory=dict)

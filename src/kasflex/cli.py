@@ -110,7 +110,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         projected = len(result.realised_violations) - hard
         print("\n  Audited against the realised day with every check enabled:")
         print(f"    hard violations       {hard:>6}   (limits breached, decided exactly)")
-        print(f"    projected violations  {projected:>6}   (climate bands, from the model's projection)")
+        print(
+            f"    projected violations  {projected:>6}"
+            "   (climate bands, from the model's projection)"
+        )
         if projected:
             kinds = sorted({v["constraint"] for v in result.realised_violations
                             if v["severity"] == "projected"})
@@ -235,7 +238,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="run one scenario")
     p_run.add_argument("--config", default=DEFAULT_CONFIG)
-    p_run.add_argument("--planner", choices=["rule-based", "naive", "llm", "mpc"])
+    p_run.add_argument("--planner",
+                       choices=["rule-based", "naive", "learned", "llm", "mpc"])
     p_run.add_argument("--greenhouse", choices=["surrogate", "greenlight"])
     p_run.add_argument("--no-checker", action="store_true",
                        help="run unverified (the 'checker disabled' arm)")

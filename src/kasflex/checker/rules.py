@@ -232,11 +232,17 @@ def _chp_min_run(ctx: CheckContext) -> list[Violation]:
         if prev or not now:
             continue
         run_length = 0
+        completed = False
         for h in range(start, len(state)):
             if not state[h]:
+                completed = True
                 break
             run_length += 1
-        if run_length < chp.min_run_hours:
+        # A run still going at midnight is not short -- it is unfinished. Its length
+        # depends on tomorrow's plan, which this plan does not contain, so judging it
+        # here would reject a perfectly ordinary overnight run for ending at the edge
+        # of the horizon. Only completed runs are decidable.
+        if completed and run_length < chp.min_run_hours:
             out.append(
                 Violation(
                     constraint="chp.min_run_time",
@@ -267,11 +273,15 @@ def _chp_min_down(ctx: CheckContext) -> list[Violation]:
         if not prev or now:
             continue
         down_length = 0
+        completed = False
         for h in range(start, len(state)):
             if state[h]:
+                completed = True
                 break
             down_length += 1
-        if down_length < chp.min_down_hours:
+        # As with the minimum run time: an off-period that runs to midnight is
+        # unfinished, not too short.
+        if completed and down_length < chp.min_down_hours:
             out.append(
                 Violation(
                     constraint="chp.min_down_time",

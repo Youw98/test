@@ -126,9 +126,13 @@ class Chp:
 class Boiler:
     """Gas boiler. Heat only, fast, and the fallback whenever nothing else fits."""
 
-    thermal_capacity_kw: float = 4000.0
+    thermal_capacity_kw: float = 8000.0
+    """Sized for the default 5 ha greenhouse. GreenLight-Gym2 reports a maximum
+    heating power of 130 W/m2, so a 5 ha site needs about 6.5 MW on the coldest
+    hour; 4 MW would leave the checker reporting an unmeetable heat demand on any
+    genuinely cold night."""
     efficiency: float = 0.90
-    ramp_kw_per_hour: float = 4000.0
+    ramp_kw_per_hour: float = 8000.0
 
     def gas_input_kw(self, thermal_kw: float) -> float:
         if thermal_kw <= 0.0:

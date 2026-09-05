@@ -33,7 +33,9 @@ flowchart TB
     end
 
     BRIEF["<b>Operator brief</b><br/><i>price ceiling, light target, events</i>"]
-    PLANNER["<b>Planner</b> — rule-based · MPC · LLM<br/><i>all three emit the same intent schema</i><br/>sees forecasts only"]
+    FORECAST["<b>Demand forecaster</b><br/><i>ridge on degree-hours, calendar,<br/>lagged demand</i>"]
+    METER[("Past operation<br/><i>metered demand</i>")]
+    PLANNER["<b>Planner</b> — rule-based · <b>learned</b> · MPC · LLM<br/><i>all emit the same intent schema</i><br/>sees forecasts only"]
     CHECK["<b>Safety checker</b> — deterministic, pure<br/><b>electrical</b> contract · battery · SoC · C-rate<br/><b>asset</b> buffer · CHP min run/down · ramp<br/><b>crop</b> DLI · temperature · humidity · CO2"]
     FALLBACK["Rule-based baseline<br/><i>takes over after N revisions</i>"]
     HUMAN["<b>Human approval</b><br/><i>approve · edit · reject</i>"]
@@ -55,6 +57,8 @@ flowchart TB
 
     DATA -- "forecasts + prices" --> PLANNER
     BRIEF --> PLANNER
+    METER --> FORECAST
+    FORECAST -- "predicted heat demand" --> PLANNER
     PLANNER -- "hourly energy intent" --> CHECK
     CHECK -- "<b>rejected</b><br/>constraint · hour<br/>actual · feasible bound" --> PLANNER
     CHECK -- "exhausted revisions" --> FALLBACK
@@ -83,11 +87,11 @@ flowchart TB
     style DATA fill:#fbfcfe,stroke:#2c5aa0,stroke-dasharray:0
     style P2 fill:#fafafa,stroke:#999,stroke-dasharray:6 4
 
-    class PLANNER,CHECK,HUB,LOWLEVEL,AUDIT,RESULT,FALLBACK,BRIEF ours
+    class PLANNER,CHECK,HUB,LOWLEVEL,AUDIT,RESULT,FALLBACK,BRIEF,FORECAST ours
     class GL,PGM,PRICE,FCAST,ACTUAL,AGC theirs
     class DSO,AGG future
     class HUMAN human
-    class LOG store
+    class LOG,METER store
 ```
 
 Green is KasFlex. Blue is someone else's validated code or data. Orange is the
@@ -180,7 +184,9 @@ table would measure nothing.
 | `kasflex.checker.verdict` | Machine-readable rejections and planner feedback. |
 | `kasflex.energy.assets` | Asset models and limits, in explicit units. |
 | `kasflex.energy.dispatch` | Deterministic intent-to-flows, faithful to the plan. |
-| `kasflex.controllers.*` | Rule-based, naive fixture, LLM, MPC (stage 5). |
+| `kasflex.controllers.*` | Rule-based, naive fixture, learned, LLM, MPC (stage 5). |
+| `kasflex.controllers.scheduler` | Learned planner: forecast plus local-search scheduler. |
+| `kasflex.forecast.*` | Demand model, features, history construction, backtesting. |
 | `kasflex.adapters.greenhouse` | The physics seam plus the unvalidated surrogate. |
 | `kasflex.adapters.greenlight_worker` | Subprocess client for GreenLight-Gym2. |
 | `kasflex.adapters.grid` | power-grid-model feeder check (phase 2). |

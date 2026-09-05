@@ -221,3 +221,90 @@ requires a planner that can fail.
 **Risk.** Someone reports its numbers as an AI result. It is named `naive`, its
 docstring says it is not a model of language-model behaviour, and its plans carry
 `notes="Constraint-blind fixture planner. Not an AI result."`.
+
+---
+
+## ADR-0011 — The planner forecasts demand and optimises the schedule
+
+**Decision.** Add a data-driven planner (`--planner learned`) in two halves: a
+demand model fitted to past operation, and a scheduler that searches for the
+cheapest feasible plan against that forecast.
+
+**Scope change, recorded deliberately.** The requirements document lists *"training
+of new AI models"* under scope exclusions. This ADR overrides that at the project
+owner's request. The exclusion was a reasonable guard against the project becoming a
+machine-learning exercise instead of a safety one; it turned out to exclude the
+thing that makes the safety question interesting. A checker is only worth measuring
+against a planner that is genuinely trying to do well.
+
+**Why prediction is learned and scheduling is not.** They are different problems.
+
+*Prediction* is a statistical problem. The relationship between weather and a
+particular greenhouse's heat demand depends on its glazing, screens, crop and
+grower, and is not worth deriving by hand for each site. A ridge regression on
+degree-hours, calendar terms and lagged demand reaches a skill score of about 0.55
+against a same-hour-yesterday baseline, and its two strongest coefficients are
+`degree_hours` and `outdoor_temp_c` — it found the heat balance rather than an
+artifact, which is the check that matters.
+
+*Scheduling*, once demand and prices are known, is a constrained optimisation with
+an exactly known objective. Learning a policy for it — reinforcement learning —
+would need far more data than a grower has, and would produce something harder to
+trust than a search that provably cannot return a worse plan than it started from.
+So the scheduler is a deterministic local search over the hourly intent vector,
+seeded with the rule-based plan.
+
+**Scored against the real model.** Every candidate is evaluated with
+`dispatch_hour`, the same function `dispatch_plan` uses and the checker inspects.
+An optimiser scoring its own approximation of the hub is the most tedious bug this
+project could have: it produces plans that look optimal and then fail verification.
+Two mistakes of exactly that kind were made and caught while building this — the
+scorer initially judged CHP run-time from the requested *mode* rather than the
+dispatched output (`heat_led` with no heat demand dispatches nothing), and the
+training history was initially built from the weather generator's demand rather
+than the greenhouse model's. Both are now covered by tests.
+
+**Cost.** Hill climbing finds a local optimum, not a global one. It is honest to
+call it an improvement on the baseline and wrong to call it optimal; the MPC
+reference (stage 5) is what will eventually bound how much is left on the table.
+
+---
+
+## ADR-0012 — The planner reserves storage headroom, because the checker exists
+
+**Decision.** The scheduler optimises against a *reserved* storage band — 45 % of
+the usable battery and buffer range held back by default — rather than against the
+real limits.
+
+**What forced it.** An optimiser will drain the heat buffer to exactly its floor,
+because under its own forecast that is the cheapest feasible plan. Then the forecast
+is a little wrong and the plan goes through the floor. Measured over 80 held-out
+days, planning to the exact limit produced 19 rejections out of 80, dominated by
+`buffer.level_bounds`.
+
+The margin is not a safety mechanism — the checker is. It is the planner learning to
+be robust, and the trade is real money:
+
+| margin | raw saving | accepted | effective saving |
+|---|---|---|---|
+| 0.00 | 19.3 % | 61/80 | 14.1 % |
+| 0.15 | 19.0 % | 69/80 | 16.0 % |
+| **0.45** | **18.0 %** | **75/80** | **16.4 %** |
+| 0.75 | 17.0 % | 71/80 | 14.5 % |
+
+"Effective" counts a rejected plan as zero saving, since it falls back to the
+baseline (R18). **Planning right up to the limit is worth less than planning with
+reserve.** A cost objective alone would never find that; it is only visible because
+something downstream says no. That is a result about verification, not about
+storage, and it is the most interesting thing to come out of this planner so far.
+
+**Two things the margin is not.** It does not apply to grid limits: those are
+instantaneous and re-decided each hour, and the rule-based seed already leaves its
+own headroom there, so tightening them as well only makes the starting plan
+infeasible. And it is not a hard gate — margin violations are a *second objective*
+the search minimises after real feasibility, because the seed deliberately charges
+the battery to its ceiling and would otherwise never qualify.
+
+**Re-measure it.** The right reserve depends on how wrong the forecast actually is,
+and today's forecast error is the surrogate greenhouse's. These numbers should be
+regenerated once stage 1 lands.

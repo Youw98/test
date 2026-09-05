@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from kasflex.energy.assets import EnergyHub
-from kasflex.intent import Plan
+from kasflex.intent import IntervalIntent, Plan
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,10 @@ class HourlyConditions:
     heat_demand_kw: float = 0.0
     co2_demand_kg_h: float = 0.0
     irradiance_w_m2: float = 0.0
+    outdoor_temp_c: float = 5.0
+    """Outdoor air temperature. The dominant driver of greenhouse heat demand, and
+    therefore the single most useful feature a demand forecaster has. Carried here
+    so that forecasting and physics read it from the same place."""
     power_price_eur_kwh: float = 0.10
     gas_price_eur_kwh: float = 0.035
     feed_in_price_eur_kwh: float | None = None
@@ -170,6 +174,165 @@ def _chp_setpoint_kw(hub: EnergyHub, mode: str, heat_demand_kw: float, previous_
     return max(0.0, target)
 
 
+@dataclass(frozen=True)
+class HubState:
+    """Carried state between hours: what the storage holds and what the CHP is doing."""
+
+    battery_soc_kwh: float
+    buffer_level_kwh: float
+    prev_chp_electrical_kw: float
+
+    @classmethod
+    def initial(cls, hub: EnergyHub) -> HubState:
+        return cls(
+            battery_soc_kwh=hub.battery.soc_init_kwh,
+            buffer_level_kwh=hub.buffer.level_init_kwh,
+            prev_chp_electrical_kw=(
+                hub.chp.electrical_capacity_kw if hub.chp.initially_running else 0.0
+            ),
+        )
+
+
+def dispatch_hour(
+    intent: IntervalIntent,
+    hub: EnergyHub,
+    cond: HourlyConditions,
+    state: HubState,
+) -> tuple[IntervalDispatch, HubState]:
+    """Dispatch a single hour. Pure: same inputs, same outputs, no side effects.
+
+    Extracted so that a scheduler searching over candidate plans scores them against
+    exactly the model :func:`dispatch_plan` runs and the checker inspects. A
+    scheduler optimising its own approximation of the hub would produce plans that
+    look optimal and then fail verification, which is the most tedious class of bug
+    this project could have.
+
+    Returns:
+        The hour's realised flows, and the state to carry into the next hour.
+    """
+    soc = state.battery_soc_kwh
+    buffer_level = state.buffer_level_kwh
+    prev_chp_kw = state.prev_chp_electrical_kw
+
+    lighting_kw = hub.lighting_kw(intent.lighting_level)
+    pv_kw = hub.pv.generation_kw(cond.irradiance_w_m2)
+
+    # --- Heat side -------------------------------------------------------
+    chp_e_kw = _chp_setpoint_kw(hub, intent.chp_mode, cond.heat_demand_kw, prev_chp_kw)
+    chp_heat_kw = chp_e_kw * hub.chp.heat_to_power_ratio
+    heat_demand = max(0.0, cond.heat_demand_kw)
+
+    boiler_kw = 0.0
+    buffer_discharge_kw = 0.0
+    heat_from_chp_kw = 0.0
+
+    if intent.heat_source == "none":
+        remaining = 0.0
+    elif intent.heat_source == "chp":
+        heat_from_chp_kw = min(chp_heat_kw, heat_demand)
+        remaining = heat_demand - heat_from_chp_kw
+        boiler_kw = min(hub.boiler.thermal_capacity_kw, remaining)
+        remaining -= boiler_kw
+    elif intent.heat_source == "buffer":
+        # Requested as asked, up to the buffer's power rating. Whether the
+        # resulting level is legal is the checker's call.
+        buffer_discharge_kw = min(hub.buffer.max_discharge_kw, heat_demand)
+        remaining = heat_demand - buffer_discharge_kw
+        boiler_kw = min(hub.boiler.thermal_capacity_kw, remaining)
+        remaining -= boiler_kw
+    else:  # "boiler"
+        boiler_kw = min(hub.boiler.thermal_capacity_kw, heat_demand)
+        remaining = heat_demand - boiler_kw
+
+    heat_delivered = heat_from_chp_kw + boiler_kw + buffer_discharge_kw
+
+    # CHP heat the greenhouse did not take is stored, and dumped if it will not
+    # fit. Both the charge *rate* and the remaining *volume* bind here: a full
+    # tank cannot accept heat however fast you push it. This is a physical
+    # limit, not a feasibility judgement -- the plan never asked to overfill the
+    # buffer, the surplus is a consequence of the CHP setpoint -- so capping it
+    # here does not hide anything the checker should have caught. Heat that
+    # cannot be stored is dumped to the ambient and reported, because running a
+    # CHP to dump its heat is exactly the kind of waste an operator wants to see.
+    after_losses = buffer_level * (1.0 - hub.buffer.standing_loss_frac_per_hour)
+    surplus_chp_heat = max(0.0, chp_heat_kw - heat_from_chp_kw)
+    headroom_kwh = max(0.0, hub.buffer.level_max_kwh - after_losses + buffer_discharge_kw)
+    buffer_charge_kw = min(surplus_chp_heat, hub.buffer.max_charge_kw, headroom_kwh)
+    heat_dumped_kw = surplus_chp_heat - buffer_charge_kw
+
+    buffer_level = after_losses + buffer_charge_kw - buffer_discharge_kw
+
+    # --- Electrical side -------------------------------------------------
+    battery_charge_kw = intent.battery_power_kw if intent.battery == "charge" else 0.0
+    battery_discharge_kw = intent.battery_power_kw if intent.battery == "discharge" else 0.0
+    soc = (
+        soc
+        + battery_charge_kw * hub.battery.charge_efficiency
+        - (battery_discharge_kw / hub.battery.discharge_efficiency
+           if hub.battery.discharge_efficiency > 0 else 0.0)
+    )
+
+    elec_demand_kw = hub.base_load_kw + lighting_kw + battery_charge_kw
+    elec_supply_kw = pv_kw + chp_e_kw + battery_discharge_kw
+    net_kw = elec_demand_kw - elec_supply_kw
+    grid_import_kw = max(0.0, net_kw)
+    grid_export_kw = max(0.0, -net_kw)
+
+    # --- CO2 -------------------------------------------------------------
+    co2_available_from_chp = chp_e_kw * hub.chp.co2_kg_per_kwh_e
+    if intent.co2_source == "chp":
+        co2_from_chp = min(co2_available_from_chp, cond.co2_demand_kg_h)
+        co2_liquid = 0.0
+    elif intent.co2_source == "liquid":
+        co2_from_chp = 0.0
+        co2_liquid = cond.co2_demand_kg_h
+    else:
+        co2_from_chp = 0.0
+        co2_liquid = 0.0
+
+    # --- Costs -----------------------------------------------------------
+    gas_input_kw = hub.boiler.gas_input_kw(boiler_kw) + hub.chp.gas_input_kw(chp_e_kw)
+    cost = (
+        gas_input_kw * cond.gas_price_eur_kwh
+        + grid_import_kw * cond.power_price_eur_kwh
+        - grid_export_kw * cond.export_price
+        + co2_liquid * 0.30  # liquid CO2, EUR/kg
+    )
+
+    interval = IntervalDispatch(
+        hour=intent.hour,
+        lighting_kw=lighting_kw,
+        base_load_kw=hub.base_load_kw,
+        pv_kw=pv_kw,
+        chp_electrical_kw=chp_e_kw,
+        chp_heat_kw=chp_heat_kw,
+        boiler_heat_kw=boiler_kw,
+        buffer_charge_kw=buffer_charge_kw,
+        buffer_discharge_kw=buffer_discharge_kw,
+        buffer_level_kwh=buffer_level,
+        battery_charge_kw=battery_charge_kw,
+        battery_discharge_kw=battery_discharge_kw,
+        battery_soc_kwh=soc,
+        grid_import_kw=grid_import_kw,
+        grid_export_kw=grid_export_kw,
+        gas_input_kw=gas_input_kw,
+        co2_from_chp_kg=co2_from_chp,
+        co2_liquid_kg=co2_liquid,
+        heat_demand_kw=heat_demand,
+        heat_delivered_kw=heat_delivered,
+        heat_dumped_kw=heat_dumped_kw,
+        dli_contribution_mol_m2=hub.hourly_dli_mol_m2(intent.lighting_level),
+        chp_running=chp_e_kw > 0.0,
+        energy_cost_eur=cost,
+    )
+
+    return interval, HubState(
+        battery_soc_kwh=soc,
+        buffer_level_kwh=buffer_level,
+        prev_chp_electrical_kw=chp_e_kw,
+    )
+
+
 def dispatch_plan(
     plan: Plan,
     hub: EnergyHub,
@@ -194,9 +357,7 @@ def dispatch_plan(
             f"expected {len(plan.intervals)} hourly conditions, got {len(conditions)}"
         )
 
-    soc = hub.battery.soc_init_kwh
-    buffer_level = hub.buffer.level_init_kwh
-    prev_chp_kw = hub.chp.electrical_capacity_kw if hub.chp.initially_running else 0.0
+    state = HubState.initial(hub)
 
     intervals: list[IntervalDispatch] = []
     run_state: list[bool] = []
@@ -204,122 +365,9 @@ def dispatch_plan(
 
     for intent, cond in zip(plan.intervals, conditions, strict=True):
         gas_prices.append(cond.gas_price_eur_kwh)
-
-        lighting_kw = hub.lighting_kw(intent.lighting_level)
-        pv_kw = hub.pv.generation_kw(cond.irradiance_w_m2)
-
-        # --- Heat side -------------------------------------------------------
-        chp_e_kw = _chp_setpoint_kw(hub, intent.chp_mode, cond.heat_demand_kw, prev_chp_kw)
-        chp_heat_kw = chp_e_kw * hub.chp.heat_to_power_ratio
-        heat_demand = max(0.0, cond.heat_demand_kw)
-
-        boiler_kw = 0.0
-        buffer_discharge_kw = 0.0
-        heat_from_chp_kw = 0.0
-
-        if intent.heat_source == "none":
-            remaining = 0.0
-        elif intent.heat_source == "chp":
-            heat_from_chp_kw = min(chp_heat_kw, heat_demand)
-            remaining = heat_demand - heat_from_chp_kw
-            boiler_kw = min(hub.boiler.thermal_capacity_kw, remaining)
-            remaining -= boiler_kw
-        elif intent.heat_source == "buffer":
-            # Requested as asked, up to the buffer's power rating. Whether the
-            # resulting level is legal is the checker's call.
-            buffer_discharge_kw = min(hub.buffer.max_discharge_kw, heat_demand)
-            remaining = heat_demand - buffer_discharge_kw
-            boiler_kw = min(hub.boiler.thermal_capacity_kw, remaining)
-            remaining -= boiler_kw
-        else:  # "boiler"
-            boiler_kw = min(hub.boiler.thermal_capacity_kw, heat_demand)
-            remaining = heat_demand - boiler_kw
-
-        heat_delivered = heat_from_chp_kw + boiler_kw + buffer_discharge_kw
-
-        # CHP heat the greenhouse did not take is stored, and dumped if it will not
-        # fit. Both the charge *rate* and the remaining *volume* bind here: a full
-        # tank cannot accept heat however fast you push it. This is a physical
-        # limit, not a feasibility judgement -- the plan never asked to overfill the
-        # buffer, the surplus is a consequence of the CHP setpoint -- so capping it
-        # here does not hide anything the checker should have caught. Heat that
-        # cannot be stored is dumped to the ambient and reported, because running a
-        # CHP to dump its heat is exactly the kind of waste an operator wants to see.
-        after_losses = buffer_level * (1.0 - hub.buffer.standing_loss_frac_per_hour)
-        surplus_chp_heat = max(0.0, chp_heat_kw - heat_from_chp_kw)
-        headroom_kwh = max(0.0, hub.buffer.level_max_kwh - after_losses + buffer_discharge_kw)
-        buffer_charge_kw = min(surplus_chp_heat, hub.buffer.max_charge_kw, headroom_kwh)
-        heat_dumped_kw = surplus_chp_heat - buffer_charge_kw
-
-        buffer_level = after_losses + buffer_charge_kw - buffer_discharge_kw
-
-        # --- Electrical side -------------------------------------------------
-        battery_charge_kw = intent.battery_power_kw if intent.battery == "charge" else 0.0
-        battery_discharge_kw = intent.battery_power_kw if intent.battery == "discharge" else 0.0
-        soc = (
-            soc
-            + battery_charge_kw * hub.battery.charge_efficiency
-            - (battery_discharge_kw / hub.battery.discharge_efficiency
-               if hub.battery.discharge_efficiency > 0 else 0.0)
-        )
-
-        elec_demand_kw = hub.base_load_kw + lighting_kw + battery_charge_kw
-        elec_supply_kw = pv_kw + chp_e_kw + battery_discharge_kw
-        net_kw = elec_demand_kw - elec_supply_kw
-        grid_import_kw = max(0.0, net_kw)
-        grid_export_kw = max(0.0, -net_kw)
-
-        # --- CO2 -------------------------------------------------------------
-        co2_available_from_chp = chp_e_kw * hub.chp.co2_kg_per_kwh_e
-        if intent.co2_source == "chp":
-            co2_from_chp = min(co2_available_from_chp, cond.co2_demand_kg_h)
-            co2_liquid = 0.0
-        elif intent.co2_source == "liquid":
-            co2_from_chp = 0.0
-            co2_liquid = cond.co2_demand_kg_h
-        else:
-            co2_from_chp = 0.0
-            co2_liquid = 0.0
-
-        # --- Costs -----------------------------------------------------------
-        gas_input_kw = hub.boiler.gas_input_kw(boiler_kw) + hub.chp.gas_input_kw(chp_e_kw)
-        cost = (
-            gas_input_kw * cond.gas_price_eur_kwh
-            + grid_import_kw * cond.power_price_eur_kwh
-            - grid_export_kw * cond.export_price
-            + co2_liquid * 0.30  # liquid CO2, EUR/kg
-        )
-
-        intervals.append(
-            IntervalDispatch(
-                hour=intent.hour,
-                lighting_kw=lighting_kw,
-                base_load_kw=hub.base_load_kw,
-                pv_kw=pv_kw,
-                chp_electrical_kw=chp_e_kw,
-                chp_heat_kw=chp_heat_kw,
-                boiler_heat_kw=boiler_kw,
-                buffer_charge_kw=buffer_charge_kw,
-                buffer_discharge_kw=buffer_discharge_kw,
-                buffer_level_kwh=buffer_level,
-                battery_charge_kw=battery_charge_kw,
-                battery_discharge_kw=battery_discharge_kw,
-                battery_soc_kwh=soc,
-                grid_import_kw=grid_import_kw,
-                grid_export_kw=grid_export_kw,
-                gas_input_kw=gas_input_kw,
-                co2_from_chp_kg=co2_from_chp,
-                co2_liquid_kg=co2_liquid,
-                heat_demand_kw=heat_demand,
-                heat_delivered_kw=heat_delivered,
-                heat_dumped_kw=heat_dumped_kw,
-                dli_contribution_mol_m2=hub.hourly_dli_mol_m2(intent.lighting_level),
-                chp_running=chp_e_kw > 0.0,
-                energy_cost_eur=cost,
-            )
-        )
-        run_state.append(chp_e_kw > 0.0)
-        prev_chp_kw = chp_e_kw
+        interval, state = dispatch_hour(intent, hub, cond, state)
+        intervals.append(interval)
+        run_state.append(interval.chp_running)
 
     mean_gas = sum(gas_prices) / len(gas_prices) if gas_prices else 0.035
     return DispatchResult(

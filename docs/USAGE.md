@@ -46,6 +46,54 @@ Runs every condition across every day unattended and writes one JSON record per 
 to `results/runs.jsonl`, then prints the headline table. This is the command an
 external researcher runs.
 
+## Use the data-driven planner
+
+```bash
+kasflex run --planner learned
+```
+
+It fits a demand model to the greenhouse's past operation, predicts tomorrow, and
+searches for the cheapest feasible schedule. Everything is offline and deterministic.
+
+Score the forecaster on its own:
+
+```python
+from kasflex.adapters.greenhouse import SurrogateGreenhouse
+from kasflex.data.synthetic import synthetic_history
+from kasflex.forecast import (
+    RidgeForecaster, SeasonalNaiveForecaster, build_history, rolling_origin_backtest,
+)
+
+weather = synthetic_history(150, seed=5, floor_area_m2=50_000)
+history = build_history(weather.days, SurrogateGreenhouse(), 50_000)
+
+for model in (SeasonalNaiveForecaster(), RidgeForecaster()):
+    print(rolling_origin_backtest(history, model, min_train_days=21).summary())
+```
+
+```
+seasonal-naive   MAE    831.2 kW ( 47.1% of mean)   skill vs naive +0.000   n=129
+ridge            MAE    342.7 kW ( 19.4% of mean)   skill vs naive +0.588   n=129
+```
+
+Check it found the physics rather than an artifact:
+
+```python
+model = RidgeForecaster(); model.fit(history, upto=100)
+print(list(model.coefficients())[:3])   # degree_hours and outdoor_temp_c should lead
+```
+
+Build a history from **real** data instead of synthetic weather by passing any
+objects with `date`, `forecast` and `actual` condition series to `build_history`.
+
+Trade robustness against cost with the storage reserve:
+
+```python
+from kasflex.controllers.scheduler import LearnedPlanner
+planner = LearnedPlanner(history=history[:100])
+planner.scheduler.safety_margin = 0.45   # default; 0.0 plans to the exact limit
+```
+
 ## Verify a plan by hand
 
 ```bash

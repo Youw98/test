@@ -37,16 +37,21 @@ across three days and prints:
 ```
 condition               runs    cost EUR  violations   hard  fallback   peak kW
 -------------------------------------------------------------------------------
-rule-based                 3    10498.15        0.00      0      0.00      5718
-ai-unverified              3    11601.63       66.00    198      0.00     10650
-ai-verified                3    10498.15        0.00      0      1.00      5718
-ai-verified-silent         3    10498.15        0.00      0      1.00      5718
-ai-verified-gap            3    10498.15        0.00      0      1.00      5718
+rule-based                 3    11561.62        0.00      0      0.00      5718
+learned                    3    10716.28        0.00      0      0.00      5650
+learned-unverified         3    10716.28        0.00      0      0.00      5650
+ai-unverified              3    12582.90       65.67    197      0.00     10650
+ai-verified                3    11561.62        0.00      0      1.00      5718
+ai-verified-silent         3    11561.62        0.00      0      1.00      5718
+ai-verified-gap            3    11561.62        0.00      0      1.00      5718
 ```
 
-An unverified constraint-blind planner racks up 66 violations and costs *more* than
-the baseline. Verified, the same planner is rejected until control falls back to the
-baseline, and violations go to zero.
+Read two rows at a time. `ai-unverified` is a constraint-blind planner let loose: 66
+violations, and it costs *more* than the baseline. `ai-verified` is the same planner
+with the checker on — rejected until control falls back to the baseline, violations
+zero. And `learned` is the data-driven planner: it forecasts tomorrow's heat demand
+from past operation, then optimises the schedule against it, coming in about 7%
+below the baseline with no violations and no fallback.
 
 Those numbers are **apparatus, not findings** — the greenhouse model is an
 unvalidated surrogate and the planner is a fixture. They demonstrate that the
@@ -66,6 +71,30 @@ KasFlex does not implement greenhouse physics or power flow. It wraps
 [power-grid-model](https://github.com/PowerGridModel/power-grid-model), and adds
 what neither has: market prices, the energy hub, the intent abstraction, the safety
 checker, human approval, and the experiment harness.
+
+## The planner
+
+`--planner learned` is two things, and they are deliberately different kinds of thing:
+
+**Prediction is learned.** A ridge regression fitted to the greenhouse's own past
+demand, using degree-hours, calendar terms and lagged demand. It reaches a skill
+score around 0.55 against a same-hour-yesterday baseline, and its strongest
+coefficients are `degree_hours` and `outdoor_temp_c` — it found the heat balance,
+not an artifact of the data.
+
+**Scheduling is optimised.** Once demand and prices are known, choosing when to run
+the CHP and charge the battery is a constrained optimisation with an exactly known
+objective. Learning a policy for that would need more data than a grower has and be
+harder to trust than a search that provably cannot return a worse plan than it
+started from. So it is a deterministic local search, scored against the *real*
+dispatch model rather than an approximation of it.
+
+The most interesting thing to fall out of it: **planning right up to the limit is
+worth less than planning with reserve.** An optimiser drains the heat buffer to
+exactly its floor, and then any forecast error puts it through. Holding storage back
+costs 1.3 points of raw saving and turns 19 rejections into 5, which is worth more.
+A cost objective alone would never find that — it is only visible because something
+downstream says no. See [ADR-0012](docs/DECISIONS.md).
 
 ## The three ideas
 
@@ -110,7 +139,7 @@ its absolute value. See [ADR-0004](docs/DECISIONS.md).
 
 ## Status
 
-Stages 0 and 2 built and tested. 107 tests, 94% coverage, offline.
+Stages 0, 2 and the data-driven planner built and tested. 140 tests, 95% coverage, offline.
 
 | Stage | | |
 |---|---|---|
@@ -119,6 +148,7 @@ Stages 0 and 2 built and tested. 107 tests, 94% coverage, offline.
 | 2 | Safety checker | ✅ |
 | 3 | Real ENTSO-E prices and Dutch weather | 🔶 |
 | 4 | Language-model planner | 🔶 built, needs live models |
+| 4b | Learned forecaster + optimising scheduler | ✅ |
 | 5 | MPC reference | ⬜ |
 | 6 | Browser interface | ⬜ |
 | 7 | Fleet and grid | 🔶 adapter built |

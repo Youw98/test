@@ -38,6 +38,11 @@ class Condition:
 def default_conditions() -> list[Condition]:
     """The four arms acceptance criterion 4 requires, plus the R21 exclusion arm.
 
+    ``learned`` is the data-driven planner: a demand model fitted to past operation,
+    feeding a scheduler that optimises against the real dispatch model. Pairing it
+    with ``learned-unverified`` asks the headline question of a planner that is
+    actually trying to do well, rather than only of a fixture built to fail.
+
     ``ai-unverified`` versus ``ai-verified`` is the headline comparison.
     ``ai-verified-silent`` separates the value of verification from the value of
     explanation (R19). ``ai-verified-gap`` leaves one designated check off so that
@@ -45,6 +50,8 @@ def default_conditions() -> list[Condition]:
     """
     return [
         Condition("rule-based", "rule-based", CheckerConfig(enabled=True)),
+        Condition("learned", "learned", CheckerConfig(enabled=True)),
+        Condition("learned-unverified", "learned", CheckerConfig(enabled=False)),
         Condition("mpc", "mpc", CheckerConfig(enabled=True)),
         Condition("ai-unverified", "naive", CheckerConfig(enabled=False)),
         Condition("ai-verified", "naive", CheckerConfig(enabled=True)),
@@ -71,12 +78,30 @@ def build_planner(name: str, config: ScenarioConfig) -> Planner:
         from kasflex.controllers.mpc import MpcPlanner  # noqa: PLC0415
 
         return MpcPlanner()
+    if name == "learned":
+        from kasflex.controllers.scheduler import LearnedPlanner  # noqa: PLC0415
+        from kasflex.data.synthetic import synthetic_history  # noqa: PLC0415
+        from kasflex.forecast.history import build_history  # noqa: PLC0415
+
+        # The history is the greenhouse's own past demand, produced by the same
+        # model the run will execute. Training on anything else forecasts a
+        # different greenhouse -- see kasflex.forecast.history.
+        weather = synthetic_history(
+            config.history_days,
+            seed=config.seed + 9_000,
+            floor_area_m2=config.hub.floor_area_m2,
+            winter=config.winter,
+        )
+        history = build_history(
+            weather.days, build_greenhouse(config.greenhouse, config), config.hub.floor_area_m2
+        )
+        return LearnedPlanner(history=history)
     if name == "llm":
         from kasflex.controllers.llm import LlmPlanner, TraceStore  # noqa: PLC0415
 
         return LlmPlanner(model=config.llm_model, traces=TraceStore(config.trace_path))
     raise ValueError(
-        f"unknown planner {name!r}; available: rule-based, naive, mpc, llm"
+        f"unknown planner {name!r}; available: rule-based, naive, learned, mpc, llm"
     )
 
 
