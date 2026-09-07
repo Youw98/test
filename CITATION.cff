@@ -1,0 +1,64 @@
+cff-version: 1.2.0
+message: "If you use KasFlex, please cite it using these metadata."
+title: "KasFlex: verified agentic energy management for greenhouse horticulture under electrical constraints"
+abstract: >-
+  KasFlex is a reproducible simulation testbed in which a language-model planner
+  proposes hourly energy intent for a greenhouse energy hub, a deterministic
+  safety checker verifies that intent against electrical, asset and crop limits,
+  and a human approves or rejects it. It measures what verification and human
+  oversight are worth, by running the same scenario with the checker enabled and
+  disabled. KasFlex wraps existing validated components (GreenLight-Gym2 for
+  greenhouse and crop physics, power-grid-model for network power flow) rather
+  than reimplementing them.
+type: software
+authors:
+  - given-names: Tahir
+    family-names: Abbas
+    affiliation: "Wageningen University & Research"
+    email: t.abbas@wur.nl
+version: 0.1.0
+date-released: "2026-09-04"
+license: Apache-2.0
+repository-code: "https://github.com/youw98/test"
+keywords:
+  - agentic AI
+  - greenhouse horticulture
+  - energy management
+  - grid congestion
+  - safety verification
+  - human oversight
+references:
+  - type: software
+    title: "GreenLight-Gym2: Reinforcement learning benchmark environment for control of greenhouse production systems"
+    authors:
+      - given-names: Bart
+        family-names: van Laatum
+      - given-names: Eldert J.
+        family-names: van Henten
+      - given-names: Sjoerd
+        family-names: Boersma
+    repository-code: "https://github.com/BartvLaatum/GreenLight-Gym2"
+    license: AGPL-3.0-or-later
+    doi: "10.1016/j.ifacol.2025.11.827"
+    notes: "Greenhouse climate and crop dynamics. Used through an isolated subprocess worker."
+  - type: software
+    title: "power-grid-model"
+    repository-code: "https://github.com/PowerGridModel/power-grid-model"
+    license: MPL-2.0
+    notes: "Steady-state distribution power flow, used for the phase-2 grid feasibility check."
+  - type: data
+    title: "Autonomous Greenhouse Challenge, Second Edition (2019)"
+    authors:
+      - family-names: Hemming
+        given-names: Silke
+      - family-names: de Zwart
+        given-names: Feije
+      - family-names: Elings
+        given-names: Anne
+      - family-names: Petropoulou
+        given-names: Anna
+      - family-names: Righini
+        given-names: Isabella
+    year: 2020
+    doi: "10.4121/uuid:88d22c60-21b3-4ea8-90db-20249a5be2a7"
+    notes: "Validation reference for simulated energy consumption."

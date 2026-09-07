@@ -1,0 +1,419 @@
+"""Command line interface.
+
+Five commands, each of which does one thing:
+
+    kasflex run         one scenario, printed as a plan the operator can read
+    kasflex experiment  the full matrix, unattended, writing structured records
+    kasflex verify      check a plan file against a scenario's limits
+    kasflex datasets    the data provenance registry
+    kasflex doctor      what is installed and what is missing
+
+``run`` and ``experiment`` work offline on a bare clone with no API key and no
+downloads, which is acceptance criteria 2 and 7.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from kasflex.checker.rules import CheckerConfig, SafetyChecker
+from kasflex.config import ScenarioConfig
+from kasflex.data.registry import DATASETS
+from kasflex.data.synthetic import synthetic_day
+from kasflex.experiment import (
+    ExperimentMatrix,
+    build_greenhouse,
+    build_planner,
+    render_summary,
+    summarise,
+)
+from kasflex.intent import IntentSchemaError, Plan
+from kasflex.oversight import AuditLog
+from kasflex.resources import default_config_path, is_frozen, resolve_output
+from kasflex.run import run_scenario
+
+DEFAULT_CONFIG = str(default_config_path())
+
+
+def _load_day(config: ScenarioConfig, seed: int | None = None):
+    """Load the scenario's conditions. Synthetic today; cached series in stage 3."""
+    if config.data_source == "cache":
+        raise SystemExit(
+            "data_source: cache is not wired up yet. The cache and its provenance "
+            "manifest exist (see kasflex.data.cache), but the ENTSO-E and Open-Meteo "
+            "fetchers land in stage 3 of the MVP plan. Use data_source: synthetic."
+        )
+    return synthetic_day(
+        config.date,
+        seed=config.seed if seed is None else seed,
+        floor_area_m2=config.hub.floor_area_m2,
+        winter=config.winter,
+    )
+
+
+def _print_plan(plan: Plan, limit: int = 24) -> None:
+    print(f"\nPlan for {plan.date} by {plan.planner} (revision {plan.revision})")
+    header = (
+        f"{'hr':>3}  {'heat':<7} {'light':>6}  {'battery':<18} "
+        f"{'CHP':<11} {'CO2':<7} reasoning"
+    )
+    print(header)
+    print("-" * 118)
+    for iv in plan.intervals[:limit]:
+        battery = iv.battery
+        if iv.battery != "idle":
+            battery = f"{iv.battery} {iv.battery_power_kw:,.0f} kW"
+        print(
+            f"{iv.hour:3d}  {iv.heat_source:<7} {iv.lighting_level:6.2f}  "
+            f"{battery:<18} {iv.chp_mode:<11} {iv.co2_source:<7} "
+            f"{iv.reasoning[:46]}"
+        )
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    config = ScenarioConfig.from_yaml(args.config)
+    if args.planner:
+        config = ScenarioConfig(**{**config.__dict__, "planner": args.planner})
+    if args.greenhouse:
+        config = ScenarioConfig(**{**config.__dict__, "greenhouse": args.greenhouse})
+    if args.no_checker:
+        config = ScenarioConfig(
+            **{**config.__dict__, "checker": CheckerConfig(**{**config.checker.__dict__,
+                                                             "enabled": False})}
+        )
+
+    day = _load_day(config)
+    result = run_scenario(
+        scenario=config.name,
+        date=config.date,
+        hub=config.hub,
+        forecast=day.forecast,
+        actual=day.actual,
+        planner=build_planner(config.planner, config),
+        greenhouse=build_greenhouse(config.greenhouse, config),
+        checker_config=config.checker,
+        audit_log=AuditLog(resolve_output(config.audit_path)),
+        brief=config.brief,
+        seed=config.seed,
+        provenance={"data_source": config.data_source},
+    )
+
+    if not args.quiet:
+        _print_plan(result.plan)
+        print(f"\nChecker: {'enabled' if result.checker_enabled else 'DISABLED'}")
+        print(result.verdict.feedback(explain=config.checker.explain, limit=8))
+        if result.fell_back_to_baseline:
+            print("\nControl was handed to the rule-based baseline.")
+        print("\nRealised day:")
+        for key, value in result.metrics.items():
+            print(f"  {key:<28} {value:>12,.2f}")
+        # Hard and projected are reported separately, always. A bare count mixes an
+        # arithmetic contract breach with a forward model's guess about humidity,
+        # and the two mean very different things (docs/DECISIONS.md ADR-0007).
+        hard = result.realised_hard_violations
+        projected = len(result.realised_violations) - hard
+        print("\n  Audited against the realised day with every check enabled:")
+        print(f"    hard violations       {hard:>6}   (limits breached, decided exactly)")
+        print(
+            f"    projected violations  {projected:>6}"
+            "   (climate bands, from the model's projection)"
+        )
+        if projected:
+            kinds = sorted({v["constraint"] for v in result.realised_violations
+                            if v["severity"] == "projected"})
+            print(f"    projected constraints: {', '.join(kinds)}")
+        if not result.outcome.validated:
+            print(
+                f"\n  NOTE: the '{result.greenhouse_model}' greenhouse model has not been "
+                f"validated against measured data. These figures are not operational advice."
+            )
+
+    if args.json_out:
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json_out).write_text(json.dumps(result.to_record(), indent=2, default=str))
+        print(f"\nWrote {args.json_out}")
+    return 0
+
+
+def cmd_experiment(args: argparse.Namespace) -> int:
+    config = ScenarioConfig.from_yaml(args.config)
+    matrix = ExperimentMatrix(
+        config=config, days=args.days, output_path=str(resolve_output(args.output))
+    )
+    print(f"Running {len(matrix.conditions)} conditions x {args.days} days "
+          f"= {len(matrix.conditions) * args.days} runs\n")
+    records = matrix.run()
+    print(render_summary(summarise(records)))
+    print(f"\nWrote {matrix.output_path} ({len(records)} records)")
+    print(f"Audit log: {resolve_output(config.audit_path)}")
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    config = ScenarioConfig.from_yaml(args.config)
+    try:
+        plan = Plan.from_json(Path(args.plan).read_text())
+    except IntentSchemaError as exc:
+        print(f"Not a valid plan: {exc}", file=sys.stderr)
+        return 2
+
+    day = _load_day(config)
+    greenhouse = build_greenhouse(config.greenhouse, config)
+    outcome = greenhouse.simulate_day(plan, day.forecast, config.hub.floor_area_m2)
+    import dataclasses
+
+    conditions = tuple(
+        dataclasses.replace(
+            c, heat_demand_kw=outcome.heat_demand_kw[i], co2_demand_kg_h=outcome.co2_demand_kg_h[i]
+        )
+        for i, c in enumerate(day.forecast)
+    )
+    verdict = SafetyChecker(config.hub, config.checker).verify(
+        plan, conditions, outcome.projection()
+    )
+    print(verdict.feedback(explain=config.checker.explain, limit=100))
+    if args.json_out:
+        Path(args.json_out).write_text(verdict.to_json())
+    return 0 if verdict.accepted else 1
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    """Download and cache one day, or a range of days."""
+    from datetime import date as Date
+    from datetime import timedelta
+
+    from kasflex.data.cache import DataCache
+    from kasflex.data.pipeline import ensure_day
+    from kasflex.data.sources import FetchError
+
+    config = ScenarioConfig.from_yaml(args.config)
+    cache = DataCache(args.cache_dir)
+    start = Date.fromisoformat(args.date) if args.date else Date.today() + timedelta(days=1)
+    days = [start + timedelta(days=i) for i in range(args.days)]
+
+    failures = 0
+    for day in days:
+        try:
+            data = ensure_day(
+                day,
+                cache=cache,
+                latitude=config.latitude,
+                longitude=config.longitude,
+                gas_price_eur_kwh=config.gas_price_eur_kwh,
+                entsoe_zone=config.entsoe_zone,
+                allow_network=not args.offline,
+                want_actuals=not args.no_actuals,
+            )
+            origins = " ".join(f"{k}={v}" for k, v in data.sources.items())
+            print(f"  {data.date}  ok   {origins}")
+        except FetchError as exc:
+            failures += 1
+            print(f"  {day.isoformat()}  FAIL {exc}", file=sys.stderr)
+
+    print(f"\n{len(days) - failures}/{len(days)} day(s) available. Cache: {cache.root}")
+    return 1 if failures else 0
+
+
+def cmd_daily(args: argparse.Namespace) -> int:
+    """The unattended job: fetch what is missing, plan the day, append a record."""
+    from datetime import date as Date
+
+    from kasflex.data.cache import DataCache
+    from kasflex.data.pipeline import run_daily
+    from kasflex.data.sources import FetchError
+
+    config = ScenarioConfig.from_yaml(args.config)
+    try:
+        record = run_daily(
+            config,
+            Date.fromisoformat(args.date) if args.date else None,
+            cache=DataCache(args.cache_dir),
+            allow_network=not args.offline,
+            results_path=resolve_output(args.output),
+        )
+    except FetchError as exc:
+        print(f"daily run failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"{record['date']}  planner={record['planner']}  "
+        f"cost EUR {record.get('net_cost_eur', 0):,.2f}  "
+        f"peak {record.get('peak_import_kw', 0):,.0f} kW  "
+        f"hard violations {record.get('realised_violations_hard', 0)}"
+    )
+    if not record.get("actuals_available"):
+        print("  note: scored against the forecast; realised weather is not in yet.")
+    print(f"  appended to {args.output}")
+    return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Start the local interface."""
+    import webbrowser
+
+    from kasflex.ui.server import serve
+
+    httpd = serve(
+        config_path=args.config, host=args.host, port=args.port, anonymous=args.anonymous
+    )
+    url = f"http://{args.host}:{args.port}/"
+    print(f"KasFlex interface on {url}")
+    print(f"  scenario   {args.config}")
+    print(f"  audit log  {resolve_output(ScenarioConfig.from_yaml(args.config).audit_path)}")
+    if args.anonymous:
+        print("  operator identity is not recorded (anonymous mode)")
+    print("\nLocalhost only, no authentication. Ctrl-C to stop.")
+    if not args.no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 - a headless machine is fine
+            pass
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        httpd.server_close()
+    return 0
+
+
+def cmd_datasets(args: argparse.Namespace) -> int:
+    if args.markdown:
+        from kasflex.data.registry import as_markdown_table
+
+        print(as_markdown_table())
+        return 0
+    for ref in DATASETS.values():
+        print(f"\n{ref.key}  [{ref.phase}]  {ref.title}")
+        print(f"  kind     {ref.kind}")
+        print(f"  source   {ref.source}")
+        print(f"  licence  {ref.licence}")
+        print(f"  access   {ref.access}")
+        print(f"  checked  {ref.verified_on}")
+        if ref.notes:
+            print(f"  notes    {ref.notes}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    print("KasFlex environment check\n")
+    import importlib.util
+
+    def status(module: str, purpose: str, extra: str) -> None:
+        found = importlib.util.find_spec(module) is not None
+        print(f"  [{'x' if found else ' '}] {module:<22} {purpose:<34} {'' if found else extra}")
+
+    print("Core:")
+    status("numpy", "arrays", "pip install kasflex")
+    status("yaml", "scenario configuration", "pip install kasflex")
+    print("\nOptional:")
+    status("power_grid_model", "grid power flow (phase 2)", "pip install 'kasflex[grid]'")
+    status("pandas", "data acquisition", "pip install 'kasflex[data]'")
+    status("pyarrow", "parquet cache", "pip install 'kasflex[data]'")
+    status("entsoe", "ENTSO-E prices", "pip install 'kasflex[data]'")
+    status("anthropic", "language-model planner", "pip install 'kasflex[llm]'")
+
+    print("\nGreenLight worker (separate environment on purpose):")
+    from kasflex.adapters.greenlight_worker import GreenLightWorker
+
+    worker = GreenLightWorker()
+    if worker.available():
+        print(f"  [x] interpreter          {worker.python}")
+    else:
+        print(f"  [ ] interpreter          {worker.python} not found")
+        print("      python3 -m venv .venv-greenlight")
+        print("      ./.venv-greenlight/bin/pip install -r workers/greenlight/requirements.txt")
+
+    if importlib.util.find_spec("gl_gym") is not None:
+        print(
+            "\n  WARNING: gl_gym is importable from THIS environment. It is AGPL-3.0 "
+            "and pins numpy<2.\n"
+            "  KasFlex core never imports it, but installing it here can hold "
+            "power-grid-model\n  back to an old release. Keep it in the worker "
+            "environment. See docs/DECISIONS.md ADR-0002."
+        )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Double-clicking the packaged application passes no arguments. A bare
+    # argparse would print usage to a console window that closes instantly, so
+    # a frozen build with no arguments opens the interface instead -- which is
+    # what someone who double-clicked an icon wanted. From a terminal the full
+    # command set still works exactly as it does from a checkout.
+    if argv is None and is_frozen() and len(sys.argv) == 1:
+        argv = ["ui"]
+
+    parser = argparse.ArgumentParser(
+        prog="kasflex",
+        description="Verified agentic energy management for greenhouse horticulture.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_run = sub.add_parser("run", help="run one scenario")
+    p_run.add_argument("--config", default=DEFAULT_CONFIG)
+    p_run.add_argument("--planner",
+                       choices=["rule-based", "naive", "learned", "llm", "mpc"])
+    p_run.add_argument("--greenhouse", choices=["surrogate", "greenlight"])
+    p_run.add_argument("--no-checker", action="store_true",
+                       help="run unverified (the 'checker disabled' arm)")
+    p_run.add_argument("--json-out")
+    p_run.add_argument("--quiet", action="store_true")
+    p_run.set_defaults(func=cmd_run)
+
+    p_exp = sub.add_parser("experiment", help="run the full matrix unattended")
+    p_exp.add_argument("--config", default=DEFAULT_CONFIG)
+    p_exp.add_argument("--days", type=int, default=3)
+    p_exp.add_argument("--output", default="results/runs.jsonl")
+    p_exp.set_defaults(func=cmd_experiment)
+
+    p_ver = sub.add_parser("verify", help="verify a plan file")
+    p_ver.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ver.add_argument("--plan", required=True)
+    p_ver.add_argument("--json-out")
+    p_ver.set_defaults(func=cmd_verify)
+
+    p_ui = sub.add_parser("ui", help="open the browser interface")
+    p_ui.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ui.add_argument("--host", default="127.0.0.1")
+    p_ui.add_argument("--port", type=int, default=8765)
+    p_ui.add_argument("--no-browser", action="store_true")
+    p_ui.add_argument("--anonymous", action="store_true",
+                      help="do not record operator identity in the audit log (R26)")
+    p_ui.set_defaults(func=cmd_ui)
+
+    p_data = sub.add_parser("datasets", help="show the data provenance registry")
+    p_data.add_argument("--markdown", action="store_true")
+    p_data.set_defaults(func=cmd_datasets)
+
+    p_fetch = sub.add_parser("fetch", help="download and cache data for a day or range")
+    p_fetch.add_argument("--config", default=DEFAULT_CONFIG)
+    p_fetch.add_argument("--date", help="ISO date; defaults to tomorrow")
+    p_fetch.add_argument("--days", type=int, default=1, help="how many days from --date")
+    p_fetch.add_argument("--cache-dir", default="data/cache")
+    p_fetch.add_argument("--offline", action="store_true",
+                         help="report what is cached without fetching anything")
+    p_fetch.add_argument("--no-actuals", action="store_true",
+                         help="skip the weather archive (only forecasts)")
+    p_fetch.set_defaults(func=cmd_fetch)
+
+    p_daily = sub.add_parser("daily", help="the unattended daily job: fetch, plan, record")
+    p_daily.add_argument("--config", default=DEFAULT_CONFIG)
+    p_daily.add_argument("--date", help="ISO date; defaults to tomorrow")
+    p_daily.add_argument("--cache-dir", default="data/cache")
+    p_daily.add_argument("--offline", action="store_true", help="run from cache only")
+    p_daily.add_argument("--output", default="results/daily.jsonl")
+    p_daily.set_defaults(func=cmd_daily)
+
+    p_doc = sub.add_parser("doctor", help="check the environment")
+    p_doc.set_defaults(func=cmd_doctor)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

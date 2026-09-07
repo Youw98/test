@@ -1,0 +1,78 @@
+# A lit 5 ha tomato greenhouse on a congested Westland feeder, winter day.
+#
+# Period: 2023. Scenario runs use 2022 onwards, where price volatility, grid
+# congestion and archived weather forecasts exist together. Validation against the
+# Autonomous Greenhouse Challenge measurements uses 2019-2020 instead, at the 96 m2
+# compartment scale. Do not mix them -- see docs/DECISIONS.md ADR-0004.
+
+name: westland-winter
+date: "2023-01-15"
+seed: 0
+winter: true
+planner: rule-based        # rule-based | naive | llm | mpc
+greenhouse: surrogate      # surrogate | greenlight
+data_source: synthetic     # synthetic | cache
+brief: >-
+  Cold, still day. Keep the crop in band and hold the evening peak import under the
+  congestion limit. Do not buy power above 0.35 EUR/kWh.
+
+hub:
+  floor_area_m2: 50000
+  lamp_power_w_m2: 110
+  lamp_ppfd_umol_m2_s: 185
+  base_load_kw: 150
+
+  contract:
+    import_limit_kw: 6000
+    export_limit_kw: 4000
+    # Liander congestion instruction: reduced capacity over the evening peak.
+    # In the MVP these are set by hand; the capacity map (D10) is a phase-2 input.
+    congestion_windows:
+      16: [3000, 1000]
+      17: [3000, 1000]
+      18: [3000, 1000]
+      19: [3000, 1000]
+
+  battery:
+    capacity_kwh: 2000
+    max_charge_kw: 1000
+    max_discharge_kw: 1000
+    soc_min_frac: 0.10
+    soc_max_frac: 0.90
+    soc_init_frac: 0.50
+    c_rate_max: 0.5
+
+  chp:
+    electrical_capacity_kw: 1500
+    heat_to_power_ratio: 1.2
+    electrical_efficiency: 0.40
+    min_run_hours: 2
+    min_down_hours: 2
+    ramp_kw_per_hour: 1500
+    co2_kg_per_kwh_e: 0.45
+
+  boiler:
+    thermal_capacity_kw: 8000
+    efficiency: 0.90
+
+  buffer:
+    capacity_kwh: 8000
+    max_charge_kw: 3000
+    max_discharge_kw: 3000
+
+  pv:
+    peak_kw: 500
+
+  crop:
+    dli_target_mol_m2: 10.0
+    dli_tolerance_mol_m2: 3.0
+    temp_min_c: 15.0
+    temp_max_c: 34.0
+    rh_max_pct: 85.0
+
+checker:
+  enabled: true
+  explain: true
+  max_revisions: 3
+  excluded_checks: []
+  fail_on_projected: false

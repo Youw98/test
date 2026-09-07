@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KasFlex</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="sim-notice" role="note">
+  <strong>Simulation.</strong> No greenhouse equipment is connected. Not validated for
+  operational use — do not act on these figures.
+</div>
+
+<header>
+  <h1>KasFlex</h1>
+  <p class="sub">Plan a day of greenhouse energy use, verify it, decide on it.</p>
+</header>
+
+<main>
+  <!-- ---------------------------------------------------------- settings -->
+  <aside id="settings">
+    <div class="panel-head">
+      <h2>Scenario</h2>
+      <button id="reset" class="link" type="button">Reset</button>
+    </div>
+    <p class="muted" id="scenario-name"></p>
+    <form id="settings-form"></form>
+    <div class="actions">
+      <button id="run" type="button" class="primary">Plan the day</button>
+      <button id="compare" type="button">Compare planners</button>
+    </div>
+    <p class="muted small" id="elapsed"></p>
+  </aside>
+
+  <!-- ----------------------------------------------------------- results -->
+  <section id="results">
+
+    <div id="empty" class="card placeholder">
+      <p>Choose your settings and press <strong>Plan the day</strong>.</p>
+      <p class="muted small">Everything runs locally. Nothing is sent anywhere.</p>
+    </div>
+
+    <div id="error" class="card error" hidden></div>
+
+    <!-- outcome first: cost and crop, then energy (R28) -->
+    <div id="outcome" hidden>
+      <div class="cards">
+        <div class="card stat">
+          <span class="label">Cost of the day</span>
+          <span class="value" id="stat-cost">—</span>
+          <span class="foot" id="stat-cost-m2"></span>
+        </div>
+        <div class="card stat">
+          <span class="label">Crop growth</span>
+          <span class="value" id="stat-growth">—</span>
+          <span class="foot" id="stat-band"></span>
+        </div>
+        <div class="card stat" id="card-violations">
+          <span class="label">Limit violations</span>
+          <span class="value" id="stat-violations">—</span>
+          <span class="foot" id="stat-projected"></span>
+        </div>
+      </div>
+
+      <div class="card" id="verdict-card">
+        <h3>Verdict <span id="verdict-badge" class="badge"></span></h3>
+        <pre id="verdict-text"></pre>
+        <p class="muted small" id="verdict-note"></p>
+      </div>
+
+      <!-- ------------------------------------------------ approve / edit -->
+      <div class="card">
+        <div class="panel-head">
+          <h3>The plan</h3>
+          <span class="muted small">Edit any cell, then re-verify before deciding.</span>
+        </div>
+        <div class="tablewrap">
+          <table id="plan">
+            <thead>
+              <tr>
+                <th>Hour</th><th>Price</th><th>Heat need</th>
+                <th>Heat from</th><th>Lamps</th><th>Battery</th><th>CHP</th><th>CO₂</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="decide">
+          <button id="reverify" type="button" disabled>Re-verify edits</button>
+          <span class="spacer"></span>
+          <input id="comment" type="text" placeholder="Comment (optional)" />
+          <button id="reject" type="button">Reject</button>
+          <button id="approve" type="button" class="primary">Approve</button>
+        </div>
+        <p class="muted small" id="decision-note"></p>
+      </div>
+
+      <details class="card">
+        <summary>Energy detail</summary>
+        <table id="metrics"></table>
+      </details>
+    </div>
+
+    <!-- ---------------------------------------------------- comparison -->
+    <div id="comparison" class="card" hidden>
+      <h3>All planners, identical scenario</h3>
+      <div class="tablewrap">
+        <table id="compare-table">
+          <thead>
+            <tr>
+              <th>Planner</th><th>Cost</th><th>Violations</th>
+              <th>Growth</th><th>In band</th><th>Peak import</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="muted small">
+        Same day, same greenhouse, same limits. Only the planner changes.
+      </p>
+    </div>
+
+  </section>
+</main>
+
+<footer>
+  <span id="model-note"></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check src/ tests/ workers/
+      - run: pytest -q --cov=kasflex --cov-report=term
+
+  # The grid extra pulls numpy>=2 and must be installable on its own. It is NOT
+  # installed alongside gl-gym anywhere -- see docs/DECISIONS.md ADR-0002.
+  grid-extra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,grid]"
+      - run: pytest -q tests/test_grid.py
+      - name: Core must not import gl_gym
+        run: |
+          if grep -rn "import gl_gym\|from gl_gym" src/; then
+            echo "::error::KasFlex core must never import gl_gym (AGPL-3.0). See ADR-0001."
+            exit 1
+          fi
+
+  # The AGPL worker environment, isolated. gl-gym pins numpy<2.
+  greenlight-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r workers/greenlight/requirements.txt
+      - name: Worker simulates a day
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          plan = {"intervals": [
+              {"hour": h, "heat_source": "boiler", "lighting_level": 0.5,
+               "battery": "idle", "battery_power_kw": 0, "chp_mode": "off",
+               "co2_source": "chp", "reasoning": ""} for h in range(24)]}
+          req = {"cmd": "simulate_day", "plan": plan, "floor_area_m2": 50000, "seed": 0}
+          p = subprocess.run([sys.executable, "workers/greenlight/worker.py"],
+                             input=json.dumps(req) + "\n", capture_output=True, text=True)
+          resp = json.loads(p.stdout.strip().splitlines()[-1])
+          assert resp["ok"], resp.get("error")
+          heat = resp["outcome"]["heat_demand_kw"]
+          assert len(heat) == 24
+          w_m2 = [h * 1000 / 50000 for h in heat]
+          assert max(w_m2) < 200, f"implausible heat demand: {max(w_m2):.0f} W/m2"
+          print(f"OK: peak heat demand {max(w_m2):.0f} W/m2")
+          PY
+
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: FAIR metadata is valid
+        run: |
+          python -c "import json; json.load(open('codemeta.json')); print('codemeta.json ok')"
+          python -c "import yaml; d=yaml.safe_load(open('CITATION.cff')); assert d['cff-version']; print('CITATION.cff ok')"

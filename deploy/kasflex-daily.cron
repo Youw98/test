@@ -1,0 +1,19 @@
+# KasFlex daily job.
+#
+# Runs at 14:10 Europe/Amsterdam, shortly after the Dutch day-ahead auction
+# publishes tomorrow's prices (around 13:00 CET). Install with:
+#
+#     crontab deploy/kasflex-daily.cron
+#
+# Set ENTSOE_API_KEY in the environment cron sees -- cron does not read your
+# shell profile, which is the single most common reason a job like this
+# silently stops working.
+
+CRON_TZ=Europe/Amsterdam
+ENTSOE_API_KEY=
+
+10 14 * * *  cd /opt/kasflex && .venv/bin/kasflex daily >> logs/daily.log 2>&1
+
+# Backfill yesterday's realised weather, so the day can be scored out of sample
+# once the archive has caught up.
+30 6 * * *   cd /opt/kasflex && .venv/bin/kasflex fetch --date "$(date -d yesterday +\%F)" >> logs/fetch.log 2>&1

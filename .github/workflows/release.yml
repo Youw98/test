@@ -1,0 +1,119 @@
+name: Build applications
+
+# PyInstaller does not cross-compile: a Windows .exe must be built on Windows, a
+# macOS binary on macOS. That is the whole reason this workflow exists — the
+# development machine cannot produce them.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: KasFlex-windows
+            binary: dist/KasFlex.exe
+          - os: macos-latest
+            artifact: KasFlex-macos
+            binary: dist/KasFlex
+          - os: ubuntu-latest
+            artifact: KasFlex-linux
+            binary: dist/KasFlex
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -e . pyinstaller
+      - run: pyinstaller packaging/kasflex.spec --noconfirm
+
+      # Building is not evidence that it works. A spec that misses a hidden import
+      # produces a binary that starts and then fails the moment a planner is
+      # chosen, so exercise the paths that would break: the bundled config, a run
+      # with each planner, and the interface serving its own static files.
+      - name: Smoke-test the built application
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="${{ matrix.binary }}"
+          "$BIN" --help > /dev/null
+          "$BIN" doctor > /dev/null
+          for planner in rule-based learned naive; do
+            echo "--- $planner"
+            "$BIN" run --planner "$planner" --quiet
+          done
+          "$BIN" experiment --days 1 > /dev/null
+          echo "all planners ran from the bundle"
+
+      - name: Smoke-test the interface
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ matrix.binary }}" ui --no-browser --port 8765 &
+          SERVER=$!
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8765/api/settings > /dev/null 2>&1 && break
+            sleep 1
+          done
+          for path in / /style.css /app.js /api/settings; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8765$path")
+            echo "  $path -> $code"
+            [ "$code" = "200" ] || { echo "FAILED: $path returned $code"; exit 1; }
+          done
+          curl -fsS -X POST http://127.0.0.1:8765/api/run \
+            -H 'Content-Type: application/json' \
+            -d '{"overrides":{"planner":"learned"}}' | head -c 80
+          echo
+          kill $SERVER 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          body: |
+            Download the file for your machine, then run it. No Python, no install.
+
+            | | |
+            |---|---|
+            | Windows | `KasFlex.exe` |
+            | macOS | `KasFlex` |
+            | Linux | `KasFlex` |
+
+            Double-click to open the interface in your browser, or run it from a
+            terminal for the full command set (`KasFlex --help`).
+
+            Results and the audit log are written to a `KasFlex` folder in your home
+            directory. Drop a `configs/` folder next to the application to use your
+            own scenario.
+
+            **The applications are unsigned.** Windows SmartScreen will warn on
+            first launch (More info -> Run anyway); on macOS, right-click and choose
+            Open, or `xattr -d com.apple.quarantine KasFlex`. Signing needs a paid
+            certificate, which this project does not have.
+
+            **Simulation only.** The greenhouse model is not validated against
+            measured data. Every figure is apparatus, not a result.

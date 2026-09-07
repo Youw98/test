@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Acknowledgement_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-1:acknowledgementdocument:8:0">
+  <Reason><code>999</code><text>No matching data found for the requested interval.</text></Reason>
+</Acknowledgement_MarketDocument>

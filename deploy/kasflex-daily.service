@@ -1,0 +1,17 @@
+[Unit]
+Description=KasFlex daily plan
+Documentation=https://github.com/youw98/test
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kasflex
+# Keep the token out of the unit file: systemd reads it from a root-only file.
+EnvironmentFile=/etc/kasflex/env
+ExecStart=/opt/kasflex/.venv/bin/kasflex daily
+# The job is cache-first, so a transient API outage is not a failure worth
+# alerting on -- but a genuine failure should still be visible in the journal.
+SuccessExitStatus=0
+User=kasflex
+Group=kasflex
