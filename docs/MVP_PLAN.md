@@ -201,16 +201,33 @@ forecasts.
 than planner skill. That is valuable once the AI planner exists and worthless
 before it.
 
-### Stage 6 — Browser interface ⬜
+### Stage 6 — Browser interface ✅ built
 
 Plan with per-interval reasoning; approve, edit and reject; re-verification on edit;
 all controllers compared on one scenario with violation counts; cost and crop
 outcome first, energy units second; a permanent "simulation, not validated for
 operational use" notice; runs offline from cached data.
 
+Built on `http.server` from the standard library rather than a web framework: the
+requirement is "browser-based, no installation", and adding FastAPI plus uvicorn to
+serve one page to one person works against that. Localhost only, no authentication.
+
+Two defects found by using it that no model test would have caught, both now
+covered by tests in `tests/test_ui.py`:
+
+* A failed re-verification left the previous **"accepted"** badge on screen, so an
+  operator could see a verdict that no longer applied to the plan in front of them.
+* A run with the checker **switched off** still read "accepted", in green, beside a
+  card reporting 66 violations. It now reads "not verified" and approval is
+  disabled, because there is nothing to approve.
+
 *Complete when:* an unfamiliar user runs a scenario unaided in 10 minutes.
+**Not yet tested on an unfamiliar user** — that is the remaining gap, and it needs
+a person, not a test.
+
 *Note:* serving this over a network is precisely what makes the AGPL question in
-ADR-0001 load-bearing. Keep the interface in the Apache-2.0 core.
+ADR-0001 load-bearing. The interface is in the Apache-2.0 core and imports nothing
+from the worker.
 
 ### Stage 7 — Fleet and grid 🔶 optional, adapter built
 
@@ -253,16 +270,16 @@ now even though the stage is not.
 | R19 | Checker and explanation switchable independently | ✅ | `CheckerConfig` |
 | R20 | Unit tests with invalid plans | ✅ | `tests/test_checker.py` |
 | R21 | Exclude a designated outcome | ✅ | `excluded_checks`, ADR-0008 |
-| R22 | Plan with reasoning; approve/edit/reject | 🔶 API built, no UI | `oversight.py` |
+| R22 | Plan with reasoning; approve/edit/reject | ✅ | `oversight.py`, UI |
 | R23 | Re-verify user edits | ✅ | `run.py` |
 | R24 | Plain-language brief | ✅ | `OperatorBrief` |
 | R25 | Append-only log | ✅ | `AuditLog` |
-| R26 | Interaction metrics, anonymous mode | 🔶 fields exist | `oversight.py` |
-| R27 | Browser-based, 10 minutes unaided | ⬜ stage 6 | — |
-| R28 | Cost and crop first | ⬜ stage 6 | — |
-| R29 | All controllers compared | ✅ CLI, ⬜ UI | `experiment.py` |
+| R26 | Interaction metrics, anonymous mode | ✅ | UI records decision time |
+| R27 | Browser-based, 10 minutes unaided | 🔶 built, untested on a real user | `kasflex ui` |
+| R28 | Cost and crop first | ✅ | `ui/static/index.html` |
+| R29 | All controllers compared | ✅ | `experiment.py`, UI compare |
 | R30 | Fully offline from cache | ✅ | `tests/test_end_to_end.py` |
-| R31 | Permanent simulation notice | 🔶 CLI yes, UI pending | `cli.py` |
+| R31 | Permanent simulation notice | ✅ | `cli.py`, UI banner |
 | R32 | Matrix unattended from CLI | ✅ | `kasflex experiment` |
 | R33 | One structured record per run | ✅ | `RunResult.to_record()` |
 | R34 | OSI licence, docs, CITATION.cff, provenance | ✅ | repository root |

@@ -17,6 +17,41 @@ Check what you have:
 kasflex doctor
 ```
 
+## The interface
+
+```bash
+kasflex ui
+```
+
+Opens a browser at <http://127.0.0.1:8765>. Change the scenario, plan the day, read
+the verdict, edit the plan, approve or reject it.
+
+**What you can change:** planner, checker on/off, whether rejections are explained,
+revisions allowed, date, seed, season, grid import and export limits, battery size
+and power, CHP size and minimum run/down times, heat buffer, crop light target,
+greenhouse area, and the operator brief. Everything else stays in the scenario file
+— the point is the handful of things an experiment actually varies.
+
+**Editing a plan.** Any cell in the plan table is editable. The moment you change
+one, *Approve* locks and *Re-verify edits* becomes available: an edit goes back
+through the same checker the planner's output did (R23). If it breaks a limit you
+cannot approve it.
+
+**Two things the interface refuses to imply.** With the checker switched off the
+verdict reads *not verified*, never *accepted* — nothing checked that plan, and
+approval is disabled because there is nothing to approve. And if a re-verification
+fails, the previous verdict is cleared rather than left on screen.
+
+Every decision goes to the append-only audit log with the time taken to make it
+(R25, R26). Use `--anonymous` to record decisions without operator identity:
+
+```bash
+kasflex ui --anonymous --port 9000 --no-browser
+```
+
+> Localhost only, single user, no authentication. It runs a simulation on your own
+> machine. Do not expose it to a network.
+
 ## Run one day
 
 ```bash

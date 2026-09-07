@@ -58,6 +58,19 @@ unvalidated surrogate and the planner is a fixture. They demonstrate that the
 measurement works, which is what the MVP owes at this stage. See the
 [MVP plan](docs/MVP_PLAN.md).
 
+## The interface
+
+```bash
+kasflex ui
+```
+
+![The interface](docs/ui.png)
+
+Change the scenario, plan the day, read the verdict, edit any cell, approve or
+reject. An edited plan cannot be approved until it has been re-verified, and with
+the checker switched off the verdict reads *not verified* rather than *accepted* —
+the screen never implies a check that did not happen.
+
 ## Architecture
 
 ![Architecture](docs/architecture.png)
@@ -156,7 +169,7 @@ its absolute value. See [ADR-0004](docs/DECISIONS.md).
 
 ## Status
 
-Stages 0, 2 and the data-driven planner built and tested. 175 tests, offline.
+Stages 0, 2 and the data-driven planner built and tested. 211 tests, offline.
 
 | Stage | | |
 |---|---|---|
@@ -167,7 +180,7 @@ Stages 0, 2 and the data-driven planner built and tested. 175 tests, offline.
 | 4 | Language-model planner | 🔶 built, needs live models |
 | 4b | Learned forecaster + optimising scheduler | ✅ |
 | 5 | MPC reference | ⬜ |
-| 6 | Browser interface | ⬜ |
+| 6 | Browser interface | ✅ |
 | 7 | Fleet and grid | 🔶 adapter built |
 
 ## Citing

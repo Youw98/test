@@ -247,6 +247,36 @@ def cmd_daily(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Start the local interface."""
+    import webbrowser
+
+    from kasflex.ui.server import serve
+
+    httpd = serve(
+        config_path=args.config, host=args.host, port=args.port, anonymous=args.anonymous
+    )
+    url = f"http://{args.host}:{args.port}/"
+    print(f"KasFlex interface on {url}")
+    print(f"  scenario   {args.config}")
+    print(f"  audit log  {ScenarioConfig.from_yaml(args.config).audit_path}")
+    if args.anonymous:
+        print("  operator identity is not recorded (anonymous mode)")
+    print("\nLocalhost only, no authentication. Ctrl-C to stop.")
+    if not args.no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 - a headless machine is fine
+            pass
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def cmd_datasets(args: argparse.Namespace) -> int:
     if args.markdown:
         from kasflex.data.registry import as_markdown_table
@@ -334,6 +364,15 @@ def main(argv: list[str] | None = None) -> int:
     p_ver.add_argument("--plan", required=True)
     p_ver.add_argument("--json-out")
     p_ver.set_defaults(func=cmd_verify)
+
+    p_ui = sub.add_parser("ui", help="open the browser interface")
+    p_ui.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ui.add_argument("--host", default="127.0.0.1")
+    p_ui.add_argument("--port", type=int, default=8765)
+    p_ui.add_argument("--no-browser", action="store_true")
+    p_ui.add_argument("--anonymous", action="store_true",
+                      help="do not record operator identity in the audit log (R26)")
+    p_ui.set_defaults(func=cmd_ui)
 
     p_data = sub.add_parser("datasets", help="show the data provenance registry")
     p_data.add_argument("--markdown", action="store_true")
