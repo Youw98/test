@@ -9,6 +9,14 @@
 
 ## Install
 
+The quickest route for someone who does not want Python at all: download the
+application from [releases](https://github.com/youw98/test/releases) and run it.
+Double-clicking opens the interface; from a terminal it takes the same commands as
+below. Results go to a `KasFlex` folder in your home directory. See
+[packaging/](../packaging/README.md).
+
+### From source
+
 ```bash
 git clone <this repository>
 cd <this repository>

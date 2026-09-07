@@ -23,6 +23,7 @@ from kasflex.controllers.naive import NaivePlanner
 from kasflex.controllers.rule_based import RuleBasedPlanner
 from kasflex.data.synthetic import synthetic_day
 from kasflex.oversight import AuditLog
+from kasflex.resources import resolve_output
 from kasflex.run import RunResult, run_scenario
 
 
@@ -99,7 +100,10 @@ def build_planner(name: str, config: ScenarioConfig) -> Planner:
     if name == "llm":
         from kasflex.controllers.llm import LlmPlanner, TraceStore  # noqa: PLC0415
 
-        return LlmPlanner(model=config.llm_model, traces=TraceStore(config.trace_path))
+        return LlmPlanner(
+            model=config.llm_model,
+            traces=TraceStore(resolve_output(config.trace_path)),
+        )
     raise ValueError(
         f"unknown planner {name!r}; available: rule-based, naive, learned, mpc, llm"
     )
@@ -136,7 +140,7 @@ class ExperimentMatrix:
         """Execute every cell and write one JSON record per run."""
         out = Path(self.output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
-        audit = AuditLog(self.config.audit_path)
+        audit = AuditLog(resolve_output(self.config.audit_path))
         records: list[dict[str, Any]] = []
 
         with out.open("w") as fh:

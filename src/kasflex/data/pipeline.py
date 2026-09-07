@@ -39,6 +39,7 @@ from kasflex.data.sources import (
     fetch_openmeteo,
 )
 from kasflex.energy.dispatch import HourlyConditions
+from kasflex.resources import resolve_output
 
 HOURS = 24
 
@@ -291,7 +292,7 @@ def run_daily(
         planner=build_planner(config.planner, config),
         greenhouse=build_greenhouse(config.greenhouse, config),
         checker_config=config.checker,
-        audit_log=AuditLog(config.audit_path),
+        audit_log=AuditLog(resolve_output(config.audit_path)),
         brief=config.brief,
         seed=config.seed,
         provenance={
@@ -311,7 +312,7 @@ def run_daily(
             "score."
         )
 
-    path = Path(results_path)
+    path = resolve_output(results_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")

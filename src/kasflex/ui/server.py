@@ -28,15 +28,15 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
 
 from kasflex.checker.rules import SafetyChecker
 from kasflex.config import ConfigError, ScenarioConfig
 from kasflex.intent import IntentSchemaError, IntervalIntent, Plan
 from kasflex.oversight import AuditLog
+from kasflex.resources import resolve_output, static_dir
 
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR = static_dir()
 
 _FAVICON = (
     b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
@@ -330,7 +330,7 @@ class UiServer:
                 planner=planner,
                 greenhouse=greenhouse,
                 checker_config=config.checker,
-                audit_log=AuditLog(config.audit_path, anonymous=self.anonymous),
+                audit_log=AuditLog(resolve_output(config.audit_path), anonymous=self.anonymous),
                 brief=config.brief,
                 seed=config.seed,
                 provenance={"data_source": config.data_source, "via": "ui"},
@@ -404,7 +404,7 @@ class UiServer:
         decision = str(payload.get("decision", "")).lower()
         if decision not in {"approve", "reject", "edit"}:
             raise ApiError("decision must be approve, reject or edit")
-        AuditLog(self.base.audit_path, anonymous=self.anonymous).append(
+        AuditLog(resolve_output(self.base.audit_path), anonymous=self.anonymous).append(
             "human_decision_ui",
             {
                 "decision": decision,

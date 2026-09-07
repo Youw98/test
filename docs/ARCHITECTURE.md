@@ -209,5 +209,6 @@ table would measure nothing.
 | `kasflex.oversight` | Approval, edits, append-only audit log. |
 | `kasflex.ui.server` | Local JSON API over the same functions the CLI uses. |
 | `kasflex.ui.static` | The single page: settings, plan, approval, comparison. |
+| `kasflex.resources` | Where files live when frozen into an executable. |
 | `kasflex.run` | One scenario, end to end, to one result record. |
 | `kasflex.experiment` | The matrix, unattended. |

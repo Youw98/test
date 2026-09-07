@@ -32,9 +32,10 @@ from kasflex.experiment import (
 )
 from kasflex.intent import IntentSchemaError, Plan
 from kasflex.oversight import AuditLog
+from kasflex.resources import default_config_path, is_frozen, resolve_output
 from kasflex.run import run_scenario
 
-DEFAULT_CONFIG = "configs/scenario_westland_winter.yaml"
+DEFAULT_CONFIG = str(default_config_path())
 
 
 def _load_day(config: ScenarioConfig, seed: int | None = None):
@@ -94,7 +95,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         planner=build_planner(config.planner, config),
         greenhouse=build_greenhouse(config.greenhouse, config),
         checker_config=config.checker,
-        audit_log=AuditLog(config.audit_path),
+        audit_log=AuditLog(resolve_output(config.audit_path)),
         brief=config.brief,
         seed=config.seed,
         provenance={"data_source": config.data_source},
@@ -139,13 +140,15 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_experiment(args: argparse.Namespace) -> int:
     config = ScenarioConfig.from_yaml(args.config)
-    matrix = ExperimentMatrix(config=config, days=args.days, output_path=args.output)
+    matrix = ExperimentMatrix(
+        config=config, days=args.days, output_path=str(resolve_output(args.output))
+    )
     print(f"Running {len(matrix.conditions)} conditions x {args.days} days "
           f"= {len(matrix.conditions) * args.days} runs\n")
     records = matrix.run()
     print(render_summary(summarise(records)))
-    print(f"\nWrote {args.output} ({len(records)} records)")
-    print(f"Audit log: {config.audit_path}")
+    print(f"\nWrote {matrix.output_path} ({len(records)} records)")
+    print(f"Audit log: {resolve_output(config.audit_path)}")
     return 0
 
 
@@ -229,7 +232,7 @@ def cmd_daily(args: argparse.Namespace) -> int:
             Date.fromisoformat(args.date) if args.date else None,
             cache=DataCache(args.cache_dir),
             allow_network=not args.offline,
-            results_path=args.output,
+            results_path=resolve_output(args.output),
         )
     except FetchError as exc:
         print(f"daily run failed: {exc}", file=sys.stderr)
@@ -259,7 +262,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     url = f"http://{args.host}:{args.port}/"
     print(f"KasFlex interface on {url}")
     print(f"  scenario   {args.config}")
-    print(f"  audit log  {ScenarioConfig.from_yaml(args.config).audit_path}")
+    print(f"  audit log  {resolve_output(ScenarioConfig.from_yaml(args.config).audit_path)}")
     if args.anonymous:
         print("  operator identity is not recorded (anonymous mode)")
     print("\nLocalhost only, no authentication. Ctrl-C to stop.")
@@ -336,6 +339,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Double-clicking the packaged application passes no arguments. A bare
+    # argparse would print usage to a console window that closes instantly, so
+    # a frozen build with no arguments opens the interface instead -- which is
+    # what someone who double-clicked an icon wanted. From a terminal the full
+    # command set still works exactly as it does from a checkout.
+    if argv is None and is_frozen() and len(sys.argv) == 1:
+        argv = ["ui"]
+
     parser = argparse.ArgumentParser(
         prog="kasflex",
         description="Verified agentic energy management for greenhouse horticulture.",

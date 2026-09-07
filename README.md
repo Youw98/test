@@ -20,6 +20,13 @@ KasFlex builds that guarantee, and measures what it is worth.
 
 ## Try it
 
+**No Python?** Download the application from
+[releases](https://github.com/youw98/test/releases) — `KasFlex.exe` on Windows,
+`KasFlex` on macOS and Linux — and double-click it. The interface opens in your
+browser. Nothing to install.
+
+**From source:**
+
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
@@ -81,6 +88,7 @@ and offline-safe. See [deploy/](deploy/README.md) for cron and systemd.
 | [Usage](docs/USAGE.md) | Every command |
 | [Data](docs/DATA.md) | Datasets, DOIs, licences, provenance |
 | [FAIR](docs/FAIR.md) | FAIR assessment, including the gaps |
+| [Packaging](packaging/README.md) | Building the double-clickable application |
 
 KasFlex does not implement greenhouse physics or power flow. It wraps
 [GreenLight-Gym2](https://github.com/BartvLaatum/GreenLight-Gym2) and
