@@ -6,14 +6,24 @@ the KasFlex interface in their browser.
 ## Getting one without building it
 
 Download it from the [releases page](https://github.com/youw98/test/releases) —
-`KasFlex.exe` for Windows, `KasFlex` for macOS or Linux. That is the intended route
-for anyone who just wants to use the thing.
+`KasFlex-windows.exe`, `KasFlex-macos` or `KasFlex-linux`. That is the intended route
+for anyone who just wants to use the thing. The three are one file each and carry a
+platform suffix because release asset names have to be unique; on macOS and Linux,
+`chmod +x` the download before running it.
 
 ## Building it yourself
 
 **PyInstaller does not cross-compile.** A Windows `.exe` must be built on Windows, a
 macOS binary on macOS. This is why `.github/workflows/release.yml` exists: it builds
 all three on CI, smoke-tests each one, and attaches them to a tagged release.
+
+Two ways to start it: push a `v*` tag, or run **Actions -> Build applications ->
+Run workflow** and type the version (`v0.1.0`) into `release_tag`. The second exists
+because pushing a tag needs direct git access to the remote, which a machine behind
+a restrictive proxy does not always have; the release job then creates the tag on
+the commit it built. Running it with `release_tag` empty builds and smoke-tests the
+binaries without publishing anything, which is the useful thing to do before
+releasing.
 
 On the platform you are targeting:
 

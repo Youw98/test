@@ -7,7 +7,15 @@ name: Build applications
 on:
   push:
     tags: ["v*"]
+  # Pushing a tag from a machine behind a restrictive proxy is not always
+  # possible, so a release can also be started by hand: give a version and the
+  # release job creates the tag on the checked-out commit itself.
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish a release under this tag (e.g. v0.1.0). Leave empty to only build artifacts."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -85,26 +93,46 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with: { path: artifacts }
+
+      # The macOS and Linux binaries are both called "KasFlex", and release asset
+      # names have to be unique -- uploaded as they are, one silently replaces the
+      # other and the release is short a platform. Suffix each with its own.
+      - name: Name the binaries per platform
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp artifacts/KasFlex-windows/KasFlex.exe release/KasFlex-windows.exe
+          cp artifacts/KasFlex-macos/KasFlex       release/KasFlex-macos
+          cp artifacts/KasFlex-linux/KasFlex       release/KasFlex-linux
+          ls -l release
+          test "$(ls release | wc -l)" = 3
+
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          # Empty on a tag push, where the action takes the tag from the ref.
+          tag_name: ${{ inputs.release_tag }}
+          files: release/*
           body: |
             Download the file for your machine, then run it. No Python, no install.
 
             | | |
             |---|---|
-            | Windows | `KasFlex.exe` |
-            | macOS | `KasFlex` |
-            | Linux | `KasFlex` |
+            | Windows | `KasFlex-windows.exe` |
+            | macOS | `KasFlex-macos` |
+            | Linux | `KasFlex-linux` |
 
-            Double-click to open the interface in your browser, or run it from a
-            terminal for the full command set (`KasFlex --help`).
+            On Windows, double-click it and the interface opens in your browser.
+
+            On macOS and Linux a downloaded file is not executable, so make it one
+            first: `chmod +x KasFlex-macos` (or `KasFlex-linux`), then run it.
+
+            Run it from a terminal for the full command set (`--help`).
 
             Results and the audit log are written to a `KasFlex` folder in your home
             directory. Drop a `configs/` folder next to the application to use your
