@@ -79,10 +79,13 @@ jobs:
             echo "  $path -> $code"
             [ "$code" = "200" ] || { echo "FAILED: $path returned $code"; exit 1; }
           done
-          curl -fsS -X POST http://127.0.0.1:8765/api/run \
+          # Not piped into head: head closes the pipe after its 80 bytes, curl
+          # dies of EPIPE on the rest, and pipefail turns that into exit 23 --
+          # a race that fails a release at random long after the run succeeded.
+          response=$(curl -fsS -X POST http://127.0.0.1:8765/api/run \
             -H 'Content-Type: application/json' \
-            -d '{"overrides":{"planner":"learned"}}' | head -c 80
-          echo
+            -d '{"overrides":{"planner":"learned"}}')
+          echo "${response:0:80}"
           kill $SERVER 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
