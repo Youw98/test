@@ -6,8 +6,10 @@ the KasFlex interface in their browser.
 ## Getting one without building it
 
 Download it from the [releases page](https://github.com/youw98/test/releases) —
-`KasFlex.exe` for Windows, `KasFlex` for macOS or Linux. That is the intended route
-for anyone who just wants to use the thing.
+`KasFlex-windows.exe`, `KasFlex-macos` or `KasFlex-linux`. That is the intended route
+for anyone who just wants to use the thing. The three are one file each and carry a
+platform suffix because release asset names have to be unique; on macOS and Linux,
+`chmod +x` the download before running it.
 
 ## Building it yourself
 
