@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the KasFlex daily plan after the day-ahead auction
+
+[Timer]
+# 14:10 local, shortly after Dutch day-ahead prices publish around 13:00 CET.
+OnCalendar=*-*-* 14:10:00 Europe/Amsterdam
+# If the machine was asleep at 14:10, run as soon as it is back.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

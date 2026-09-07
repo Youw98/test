@@ -114,6 +114,22 @@ planner to fix the plan rather than resample it.
 written and the out-of-bounds state is recorded. Clipping it would quietly fix bad
 plans and the "checker disabled" column would read zero for the wrong reason.
 
+## Running it every day
+
+```bash
+export ENTSOE_API_KEY=...
+kasflex daily          # fetch what is missing, plan tomorrow, append a record
+```
+
+Cache-first, offline-safe, idempotent, with source, licence and checksum recorded
+for every series. `deploy/` has cron, systemd and GitHub Actions setups. Prices come
+from ENTSO-E and weather from Open-Meteo; the TTF gas price is configured rather
+than fetched, since it has no free public API.
+
+The HTTP layer has not been run against the live services from the build
+environment, which blocks them — everything downstream of the response is tested
+against recorded fixtures. Do one manual `kasflex fetch` before scheduling.
+
 ## Documentation
 
 | | |
@@ -123,6 +139,7 @@ plans and the "checker disabled" column would read zero for the wrong reason.
 | [Decisions](docs/DECISIONS.md) | ADRs, including the AGPL and numpy findings |
 | [Usage](docs/USAGE.md) | Every command, and how to extend it |
 | [Data](docs/DATA.md) | Datasets, DOIs, licences, provenance |
+| [Deployment](deploy/README.md) | Running the daily job unattended |
 | [FAIR](docs/FAIR.md) | FAIR assessment, including the gaps |
 
 ## Two things to know before you extend it
@@ -139,7 +156,7 @@ its absolute value. See [ADR-0004](docs/DECISIONS.md).
 
 ## Status
 
-Stages 0, 2 and the data-driven planner built and tested. 140 tests, 95% coverage, offline.
+Stages 0, 2 and the data-driven planner built and tested. 175 tests, offline.
 
 | Stage | | |
 |---|---|---|

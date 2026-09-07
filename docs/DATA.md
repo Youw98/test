@@ -35,6 +35,32 @@ measurements exist, run scenarios on 2022 onwards where volatility, congestion a
 archived forecasts coexist. **Verify Open-Meteo's actual coverage before fixing
 scenario dates.**
 
+## Automated acquisition
+
+`kasflex fetch` and `kasflex daily` populate the cache from ENTSO-E (day-ahead
+prices) and Open-Meteo (forecast and archived weather). See
+[deploy/README.md](../deploy/README.md) for scheduling.
+
+Two format details in the ENTSO-E response are easy to get wrong and produce a
+price curve that is plausible but incorrect:
+
+* Prices are quoted in **EUR/MWh**, not EUR/kWh.
+* The point series is **sparse** — a position is omitted when its price repeats the
+  previous one, so a valid document can contain far fewer than 24 points. Reading
+  them positionally gives the wrong hours the wrong prices.
+
+Both are handled and both are covered by tests using a deliberately sparse fixture.
+
+**Clock-change days are refused, not approximated.** A Dutch local day is 23 or 25
+hours twice a year. KasFlex models a day as exactly 24 intervals throughout, and
+silently dropping or duplicating an hour would corrupt the prices and the schedule
+without anything visibly failing. `local_day_bounds` raises instead.
+
+**Untested against the live services.** The build environment blocks
+`web-api.tp.entsoe.eu`, `api.open-meteo.com` and `archive-api.open-meteo.com`, so
+the request construction is written from the published API contracts and has not
+been confirmed. Everything from the response onwards is tested.
+
 ## Caching
 
 Nothing reads a live API at run time (R30). Every series is fetched once and cached

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:0">
+  <mRID>abc123</mRID>
+  <type>A44</type>
+  <TimeSeries>
+    <mRID>1</mRID>
+    <currency_Unit.name>EUR</currency_Unit.name>
+    <price_Measure_Unit.name>MWH</price_Measure_Unit.name>
+    <Period>
+      <timeInterval>
+        <start>2023-01-14T23:00Z</start>
+        <end>2023-01-15T23:00Z</end>
+      </timeInterval>
+      <resolution>PT60M</resolution>
+      <Point><position>1</position><price.amount>90.12</price.amount></Point>
+      <Point><position>2</position><price.amount>84.5</price.amount></Point>
+      <Point><position>3</position><price.amount>79.31</price.amount></Point>
+      <Point><position>9</position><price.amount>162.4</price.amount></Point>
+      <Point><position>10</position><price.amount>137.05</price.amount></Point>
+      <Point><position>17</position><price.amount>220.11</price.amount></Point>
+      <Point><position>18</position><price.amount>231.66</price.amount></Point>
+      <Point><position>19</position><price.amount>205.02</price.amount></Point>
+      <Point><position>24</position><price.amount>101.44</price.amount></Point>
+    </Period>
+  </TimeSeries>
+</Publication_MarketDocument>

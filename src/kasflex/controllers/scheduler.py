@@ -335,6 +335,30 @@ class OptimizingScheduler:
                 yield _with(plan, hour, battery=action, battery_power_kw=power)
 
 
+def _explain(plan: Plan, conditions: Sequence[HourlyConditions], margin: float) -> Plan:
+    """Rewrite each hour's reasoning to match the plan as optimised.
+
+    The search starts from the rule-based plan and then changes fields, which leaves
+    the seed's explanation attached to an hour it no longer describes. That text is
+    what a human is asked to approve (R22), so a stale line is not cosmetic -- it is
+    an operator reading one plan and approving another.
+    """
+    lines = []
+    for intent, cond in zip(plan.intervals, conditions, strict=True):
+        parts = [f"power {cond.power_price_eur_kwh:.3f} EUR/kWh"]
+        parts.append(f"heat from {intent.heat_source}")
+        if intent.lighting_level > 0:
+            parts.append(f"lamps {intent.lighting_level:.0%}")
+        if intent.chp_mode != "off":
+            parts.append(f"CHP {intent.chp_mode.replace('_', ' ')}")
+        if intent.battery != "idle":
+            parts.append(f"battery {intent.battery} {intent.battery_power_kw:.0f} kW")
+        if intent.co2_source != "none":
+            parts.append(f"CO2 from {intent.co2_source}")
+        lines.append(dataclasses.replace(intent, reasoning="; ".join(parts)))
+    return dataclasses.replace(plan, intervals=tuple(lines))
+
+
 def _better(candidate: tuple[int, float], incumbent: tuple[int, float]) -> bool:
     """Strict lexicographic improvement, with a tolerance on the cost component."""
     if candidate[0] != incumbent[0]:
@@ -404,6 +428,7 @@ class LearnedPlanner:
             ),
             "safety_margin": self.scheduler.margin_used,
         }
+        best = _explain(best, conditions, self.scheduler.margin_used)
         return dataclasses.replace(
             best,
             planner=self.name,

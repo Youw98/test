@@ -63,6 +63,15 @@ class ScenarioConfig:
     """``synthetic`` or ``cache``. Never a live API call at run time (R30)."""
     winter: bool = True
     llm_model: str = "claude-opus-5"
+    latitude: float = 51.99
+    longitude: float = 4.25
+    """Site location for the weather request. Defaults to Westland, the Dutch
+    glasshouse cluster the scenarios are built around."""
+    entsoe_zone: str = "10YNL----------L"
+    """Bidding-zone EIC code. The Netherlands by default."""
+    gas_price_eur_kwh: float = 0.035
+    """TTF gas price. There is no free public API for this, so it is configured
+    rather than fetched; update it when the market moves materially."""
     history_days: int = 60
     """Days of past operation the learned planner trains its demand forecaster on.
     Below about 21 the lag features leave too little to fit; more is better."""

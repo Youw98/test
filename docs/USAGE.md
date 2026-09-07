@@ -103,6 +103,53 @@ kasflex verify --plan my_plan.json
 Exit code 0 if accepted, 1 if rejected, 2 if the file is not a plan. Rejections name
 the constraint, the hour, the actual value and the feasible bound.
 
+## Run it automatically every day
+
+The daily job fetches whatever the cache is missing, plans the next day, and
+appends one record to `results/daily.jsonl`.
+
+```bash
+export ENTSOE_API_KEY=...            # register at https://transparency.entsoe.eu/
+kasflex fetch --date 2026-09-08      # download and cache one day
+kasflex daily                        # fetch if needed, plan tomorrow, record it
+```
+
+Then schedule it. `deploy/` has a cron file, a systemd timer and a GitHub Actions
+workflow; see [deploy/README.md](../deploy/README.md). Time it for **after 13:00
+CET** — that is when Dutch day-ahead prices for tomorrow publish, and before that
+they do not exist.
+
+Four properties make it safe to leave running:
+
+| | |
+|---|---|
+| **Cache-first** | A day already cached is never re-fetched. Re-running is free. |
+| **Offline-safe** | Network down but the day is cached? The run proceeds. `--offline` forces it. |
+| **Idempotent** | Same day, same result. Safe to retry after a failure. |
+| **Provenance** | Every series records source, licence, retrieval date and SHA-256. |
+
+Check what you have without touching the network:
+
+```bash
+kasflex fetch --offline --days 7
+```
+
+A record with `"actuals_available": false` was scored against the forecast, because
+the weather archive had not caught up with the day yet. Re-run that date afterwards
+for a genuine out-of-sample score.
+
+### What is configured, not fetched
+
+The **TTF gas price** has no free public API, so it lives in the scenario file as
+`gas_price_eur_kwh`. Update it when the market moves materially.
+
+### One caveat before you trust a schedule
+
+The HTTP calls have not been exercised against the live services — the environment
+this was built in blocks them. Parsing, caching, retry and everything downstream are
+covered by tests against recorded responses. **Run `kasflex fetch --date <yesterday>`
+once by hand and look at the output before scheduling anything.**
+
 ## See the data provenance
 
 ```bash

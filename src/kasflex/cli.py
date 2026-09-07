@@ -55,14 +55,20 @@ def _load_day(config: ScenarioConfig, seed: int | None = None):
 
 def _print_plan(plan: Plan, limit: int = 24) -> None:
     print(f"\nPlan for {plan.date} by {plan.planner} (revision {plan.revision})")
-    print(f"{'hr':>3}  {'heat':<7} {'light':>6}  {'battery':<10} {'CHP':<11} {'CO2':<7} reasoning")
-    print("-" * 100)
+    header = (
+        f"{'hr':>3}  {'heat':<7} {'light':>6}  {'battery':<18} "
+        f"{'CHP':<11} {'CO2':<7} reasoning"
+    )
+    print(header)
+    print("-" * 118)
     for iv in plan.intervals[:limit]:
-        power = f"{iv.battery_power_kw:.0f}kW" if iv.battery != "idle" else ""
+        battery = iv.battery
+        if iv.battery != "idle":
+            battery = f"{iv.battery} {iv.battery_power_kw:,.0f} kW"
         print(
             f"{iv.hour:3d}  {iv.heat_source:<7} {iv.lighting_level:6.2f}  "
-            f"{iv.battery + ' ' + power:<10} {iv.chp_mode:<11} {iv.co2_source:<7} "
-            f"{iv.reasoning[:38]}"
+            f"{battery:<18} {iv.chp_mode:<11} {iv.co2_source:<7} "
+            f"{iv.reasoning[:46]}"
         )
 
 
@@ -171,6 +177,76 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0 if verdict.accepted else 1
 
 
+def cmd_fetch(args: argparse.Namespace) -> int:
+    """Download and cache one day, or a range of days."""
+    from datetime import date as Date
+    from datetime import timedelta
+
+    from kasflex.data.cache import DataCache
+    from kasflex.data.pipeline import ensure_day
+    from kasflex.data.sources import FetchError
+
+    config = ScenarioConfig.from_yaml(args.config)
+    cache = DataCache(args.cache_dir)
+    start = Date.fromisoformat(args.date) if args.date else Date.today() + timedelta(days=1)
+    days = [start + timedelta(days=i) for i in range(args.days)]
+
+    failures = 0
+    for day in days:
+        try:
+            data = ensure_day(
+                day,
+                cache=cache,
+                latitude=config.latitude,
+                longitude=config.longitude,
+                gas_price_eur_kwh=config.gas_price_eur_kwh,
+                entsoe_zone=config.entsoe_zone,
+                allow_network=not args.offline,
+                want_actuals=not args.no_actuals,
+            )
+            origins = " ".join(f"{k}={v}" for k, v in data.sources.items())
+            print(f"  {data.date}  ok   {origins}")
+        except FetchError as exc:
+            failures += 1
+            print(f"  {day.isoformat()}  FAIL {exc}", file=sys.stderr)
+
+    print(f"\n{len(days) - failures}/{len(days)} day(s) available. Cache: {cache.root}")
+    return 1 if failures else 0
+
+
+def cmd_daily(args: argparse.Namespace) -> int:
+    """The unattended job: fetch what is missing, plan the day, append a record."""
+    from datetime import date as Date
+
+    from kasflex.data.cache import DataCache
+    from kasflex.data.pipeline import run_daily
+    from kasflex.data.sources import FetchError
+
+    config = ScenarioConfig.from_yaml(args.config)
+    try:
+        record = run_daily(
+            config,
+            Date.fromisoformat(args.date) if args.date else None,
+            cache=DataCache(args.cache_dir),
+            allow_network=not args.offline,
+            results_path=args.output,
+        )
+    except FetchError as exc:
+        print(f"daily run failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"{record['date']}  planner={record['planner']}  "
+        f"cost EUR {record.get('net_cost_eur', 0):,.2f}  "
+        f"peak {record.get('peak_import_kw', 0):,.0f} kW  "
+        f"hard violations {record.get('realised_violations_hard', 0)}"
+    )
+    if not record.get("actuals_available"):
+        print("  note: scored against the forecast; realised weather is not in yet.")
+    print(f"  appended to {args.output}")
+    return 0
+
+
 def cmd_datasets(args: argparse.Namespace) -> int:
     if args.markdown:
         from kasflex.data.registry import as_markdown_table
@@ -262,6 +338,25 @@ def main(argv: list[str] | None = None) -> int:
     p_data = sub.add_parser("datasets", help="show the data provenance registry")
     p_data.add_argument("--markdown", action="store_true")
     p_data.set_defaults(func=cmd_datasets)
+
+    p_fetch = sub.add_parser("fetch", help="download and cache data for a day or range")
+    p_fetch.add_argument("--config", default=DEFAULT_CONFIG)
+    p_fetch.add_argument("--date", help="ISO date; defaults to tomorrow")
+    p_fetch.add_argument("--days", type=int, default=1, help="how many days from --date")
+    p_fetch.add_argument("--cache-dir", default="data/cache")
+    p_fetch.add_argument("--offline", action="store_true",
+                         help="report what is cached without fetching anything")
+    p_fetch.add_argument("--no-actuals", action="store_true",
+                         help="skip the weather archive (only forecasts)")
+    p_fetch.set_defaults(func=cmd_fetch)
+
+    p_daily = sub.add_parser("daily", help="the unattended daily job: fetch, plan, record")
+    p_daily.add_argument("--config", default=DEFAULT_CONFIG)
+    p_daily.add_argument("--date", help="ISO date; defaults to tomorrow")
+    p_daily.add_argument("--cache-dir", default="data/cache")
+    p_daily.add_argument("--offline", action="store_true", help="run from cache only")
+    p_daily.add_argument("--output", default="results/daily.jsonl")
+    p_daily.set_defaults(func=cmd_daily)
 
     p_doc = sub.add_parser("doctor", help="check the environment")
     p_doc.set_defaults(func=cmd_doctor)
