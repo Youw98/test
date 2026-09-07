@@ -94,8 +94,8 @@ virtual environment. `kasflex doctor` warns if you break that. See
 
 ## Status
 
-211 tests, runs offline. The safety checker, the energy model, the planners and the
-interface are built. Validating the greenhouse model against measured data is the
+Tested end to end and runs entirely offline. The safety checker, the energy model,
+the planners and the interface are built. Validating the greenhouse model against measured data is the
 next step, and until it is done every number is marked unvalidated.
 
 ## Licence

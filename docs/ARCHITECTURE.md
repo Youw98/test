@@ -168,6 +168,17 @@ forecast series, so a planner cannot see the realised day even by accident, and 
 runner keeps the actuals to itself until execution. Confusing the two invalidates
 every result, so the separation is structural rather than a convention.
 
+### The interface calls the same functions the CLI does
+
+`kasflex.ui.server` holds no model logic. Every endpoint is a call into
+`run_scenario`, `SafetyChecker` and `dispatch_plan` — the same entry points a
+scripted run uses — so what the browser shows cannot drift from what
+`kasflex experiment` produces. Scenario overrides round-trip through
+`ScenarioConfig.from_dict`, which means the interface gets exactly the validation a
+YAML file does, including the rejection of unknown keys. An interface able to set a
+field the config parser would refuse is an interface that can produce runs nobody
+can reproduce from a file.
+
 ### The realised audit is independent of the condition under test
 
 After execution, the day is audited by a checker with **every** check enabled,
@@ -190,7 +201,13 @@ table would measure nothing.
 | `kasflex.adapters.greenhouse` | The physics seam plus the unvalidated surrogate. |
 | `kasflex.adapters.greenlight_worker` | Subprocess client for GreenLight-Gym2. |
 | `kasflex.adapters.grid` | power-grid-model feeder check (phase 2). |
-| `kasflex.data.*` | Dataset registry, checksummed cache, synthetic fallback. |
+| `kasflex.data.registry` | Datasets with DOIs, licences and access routes. |
+| `kasflex.data.cache` | Checksummed local cache with a provenance manifest. |
+| `kasflex.data.synthetic` | Deterministic offline fallback, weather and prices. |
+| `kasflex.data.sources` | ENTSO-E and Open-Meteo fetchers; parsers pure and testable. |
+| `kasflex.data.pipeline` | The daily job: cache-first, offline-safe, idempotent. |
 | `kasflex.oversight` | Approval, edits, append-only audit log. |
+| `kasflex.ui.server` | Local JSON API over the same functions the CLI uses. |
+| `kasflex.ui.static` | The single page: settings, plan, approval, comparison. |
 | `kasflex.run` | One scenario, end to end, to one result record. |
 | `kasflex.experiment` | The matrix, unattended. |

@@ -1,8 +1,13 @@
 # KasFlex MVP plan
 
-**Status:** stages 0 and 2 built and tested; stage 3 partly built. Everything below
+**Status:** stages 0, 2, 4b and 6 built and tested; stage 3 mostly built; stage 4
+built but not yet run against live models. Stages 1 and 5 remain. Everything below
 is either working code in this repository or a stated next step, and the difference
 is marked throughout.
+
+The one thing that gates every number here is **stage 1**: until the greenhouse
+model is validated against measured data, every figure this project produces is
+apparatus rather than a result, and the code marks it as such on every run.
 
 ---
 
@@ -103,7 +108,7 @@ approval (R22–R25) are never cut: they carry the research contribution.
 ### Stage 0 — Skeleton that runs end to end ✅ built
 
 Intent schema, energy hub, dispatch, checker, rule-based baseline, runner,
-experiment matrix, CLI, FAIR metadata, 107 tests at 94% coverage.
+experiment matrix, CLI, FAIR metadata. Tested end to end, offline.
 
 *Complete when:* `kasflex experiment` runs offline on a bare clone. **It does.**
 
@@ -137,25 +142,34 @@ plan exercising it.
 *Remaining:* the crop climate bands are `PROJECTED` and currently run against the
 surrogate's projection. They become meaningful after stage 1.
 
-### Stage 3 — Real data and real prices 🔶 partly built
+### Stage 3 — Real data and real prices 🔶 mostly built
 
 Built: dataset registry with DOIs and licences, checksummed cache with a provenance
-manifest, deterministic synthetic fallback.
+manifest, deterministic synthetic fallback, ENTSO-E day-ahead and Open-Meteo
+forecast/archive fetchers, and the unattended daily job (`kasflex fetch`,
+`kasflex daily`) with cron, systemd and GitHub Actions setups in `deploy/`.
+
+Fetching is written with stdlib `urllib` rather than `entsoe-py`, so a scheduled job
+needs no pandas. Both parsers handle the traps that produce a plausible-but-wrong
+price curve: ENTSO-E quotes EUR/MWh and omits repeated positions, and a Dutch
+clock-change day has 23 or 25 hours, which is refused rather than approximated.
 
 To do:
 
-- ENTSO-E day-ahead fetcher via `entsoe-py`, cached to parquet. Needs an API key.
-- KNMI measured weather (**actuals**) and Open-Meteo archived forecasts
-  (**forecasts**) — these are two requirements, not alternatives (ADR-0005).
-  Verify Open-Meteo's actual coverage before fixing scenario dates.
-- TTF gas, daily resolution.
+- **Confirm the HTTP layer against the live services.** The environment this was
+  built in blocks all three hosts, so request construction is written from the
+  published API contracts and is unverified. Everything downstream of the response
+  is tested against recorded fixtures. Run `kasflex fetch --date <yesterday>` by
+  hand and check the output before trusting a schedule.
+- TTF gas: no free public API, so it is a configured value rather than a fetch.
 - A GL-Gym `BasePriceModel` subclass keyed on `(day_of_year, hour_of_day)`, plus the
-  `GreenhouseReward` subclass described in §2.
-- Convert KNMI data to GL-Gym's 10-column weather format under `weather_data_dir`.
+  `GreenhouseReward` subclass described in §2 — needed to put real prices inside the
+  greenhouse model rather than only in the energy hub.
+- Convert the weather series to GL-Gym's 10-column format under `weather_data_dir`.
 
 *Complete when:* a full day runs on real 2023 data with no AI and a plausible cost.
 
-### Stage 4 — Language-model planner ⬜
+### Stage 4 — Language-model planner 🔶 built, needs live models
 
 The planner, prompt, trace store and replay path are built and tested against a
 fake transport. What remains is real:
@@ -249,7 +263,7 @@ now even though the stage is not.
 |---|---|---|---|
 | R1 | GreenLight-Gym2 for climate and crop | 🔶 wired, unvalidated | `workers/greenlight/worker.py` |
 | R2 | Battery, CHP, boiler, buffer, PV, grid | ✅ | `energy/assets.py` |
-| R3 | Historical ENTSO-E and TTF prices | ⬜ stage 3 | `data/registry.py` |
+| R3 | Historical ENTSO-E and TTF prices | 🔶 ENTSO-E fetched, TTF configured | `data/sources.py` |
 | R4 | Forecast and actual strictly separate | ✅ | `controllers/base.py`, ADR-0005 |
 | R5 | Per-day cost, gas, revenue, DLI, band hours | ✅ | `dispatch.summary()`, `run.py` |
 | R6 | Identical seed gives identical results | ✅ | `tests/test_reproducibility.py` |
@@ -285,7 +299,7 @@ now even though the stage is not.
 | R34 | OSI licence, docs, CITATION.cff, provenance | ✅ | repository root |
 | R35 | Regenerate every figure from a script | 🔶 records yes, figures pending | `make reproduce` |
 
-✅ 24 · 🔶 7 · ⬜ 4
+✅ 32 · 🔶 4 · ⬜ 1  (37 rows, counted from the table above)
 
 ---
 

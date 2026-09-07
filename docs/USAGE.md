@@ -1,5 +1,12 @@
 # Using KasFlex
 
+> **Before you read any number this produces.** KasFlex is a simulation, and its
+> built-in greenhouse model is **not validated** against measured data. Every figure
+> on this page is apparatus demonstrating that the measurement works, not a result.
+> The tools say so themselves: each run prints a warning, and every result record
+> carries `greenhouse_validated: false`. Validating against the Autonomous
+> Greenhouse Challenge measurements is stage 1 of [the plan](MVP_PLAN.md).
+
 ## Install
 
 ```bash
