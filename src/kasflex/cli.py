@@ -57,8 +57,7 @@ def _load_day(config: ScenarioConfig, seed: int | None = None):
 def _print_plan(plan: Plan, limit: int = 24) -> None:
     print(f"\nPlan for {plan.date} by {plan.planner} (revision {plan.revision})")
     header = (
-        f"{'hr':>3}  {'heat':<7} {'light':>6}  {'battery':<18} "
-        f"{'CHP':<11} {'CO2':<7} reasoning"
+        f"{'hr':>3}  {'heat':<7} {'light':>6}  {'battery':<18} {'CHP':<11} {'CO2':<7} reasoning"
     )
     print(header)
     print("-" * 118)
@@ -81,8 +80,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         config = ScenarioConfig(**{**config.__dict__, "greenhouse": args.greenhouse})
     if args.no_checker:
         config = ScenarioConfig(
-            **{**config.__dict__, "checker": CheckerConfig(**{**config.checker.__dict__,
-                                                             "enabled": False})}
+            **{
+                **config.__dict__,
+                "checker": CheckerConfig(**{**config.checker.__dict__, "enabled": False}),
+            }
         )
 
     day = _load_day(config)
@@ -122,8 +123,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             "   (climate bands, from the model's projection)"
         )
         if projected:
-            kinds = sorted({v["constraint"] for v in result.realised_violations
-                            if v["severity"] == "projected"})
+            kinds = sorted(
+                {
+                    v["constraint"]
+                    for v in result.realised_violations
+                    if v["severity"] == "projected"
+                }
+            )
             print(f"    projected constraints: {', '.join(kinds)}")
         if not result.outcome.validated:
             print(
@@ -133,7 +139,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if args.json_out:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json_out).write_text(json.dumps(result.to_record(), indent=2, default=str))
+        Path(args.json_out).write_text(
+            json.dumps(result.to_record(), indent=2, default=str), encoding="utf-8"
+        )
         print(f"\nWrote {args.json_out}")
     return 0
 
@@ -143,8 +151,10 @@ def cmd_experiment(args: argparse.Namespace) -> int:
     matrix = ExperimentMatrix(
         config=config, days=args.days, output_path=str(resolve_output(args.output))
     )
-    print(f"Running {len(matrix.conditions)} conditions x {args.days} days "
-          f"= {len(matrix.conditions) * args.days} runs\n")
+    print(
+        f"Running {len(matrix.conditions)} conditions x {args.days} days "
+        f"= {len(matrix.conditions) * args.days} runs\n"
+    )
     records = matrix.run()
     print(render_summary(summarise(records)))
     print(f"\nWrote {matrix.output_path} ({len(records)} records)")
@@ -155,7 +165,7 @@ def cmd_experiment(args: argparse.Namespace) -> int:
 def cmd_verify(args: argparse.Namespace) -> int:
     config = ScenarioConfig.from_yaml(args.config)
     try:
-        plan = Plan.from_json(Path(args.plan).read_text())
+        plan = Plan.from_json(Path(args.plan).read_text(encoding="utf-8"))
     except IntentSchemaError as exc:
         print(f"Not a valid plan: {exc}", file=sys.stderr)
         return 2
@@ -176,7 +186,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     )
     print(verdict.feedback(explain=config.checker.explain, limit=100))
     if args.json_out:
-        Path(args.json_out).write_text(verdict.to_json())
+        Path(args.json_out).write_text(verdict.to_json(), encoding="utf-8")
     return 0 if verdict.accepted else 1
 
 
@@ -245,7 +255,9 @@ def cmd_daily(args: argparse.Namespace) -> int:
         f"hard violations {record.get('realised_violations_hard', 0)}"
     )
     if not record.get("actuals_available"):
-        print("  note: scored against the forecast; realised weather is not in yet.")
+        print("  note: provisionally scored against the forecast; this is not out-of-sample.")
+    else:
+        print("  note: scored against an Open-Meteo historical proxy, not measured KNMI data.")
     print(f"  appended to {args.output}")
     return 0
 
@@ -256,9 +268,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     from kasflex.ui.server import serve
 
-    httpd = serve(
-        config_path=args.config, host=args.host, port=args.port, anonymous=args.anonymous
-    )
+    httpd = serve(config_path=args.config, host=args.host, port=args.port, anonymous=args.anonymous)
     url = f"http://{args.host}:{args.port}/"
     print(f"KasFlex interface on {url}")
     print(f"  scenario   {args.config}")
@@ -355,11 +365,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="run one scenario")
     p_run.add_argument("--config", default=DEFAULT_CONFIG)
-    p_run.add_argument("--planner",
-                       choices=["rule-based", "naive", "learned", "llm", "mpc"])
+    p_run.add_argument("--planner", choices=["rule-based", "naive", "learned", "llm", "mpc"])
     p_run.add_argument("--greenhouse", choices=["surrogate", "greenlight"])
-    p_run.add_argument("--no-checker", action="store_true",
-                       help="run unverified (the 'checker disabled' arm)")
+    p_run.add_argument(
+        "--no-checker", action="store_true", help="run unverified (the 'checker disabled' arm)"
+    )
     p_run.add_argument("--json-out")
     p_run.add_argument("--quiet", action="store_true")
     p_run.set_defaults(func=cmd_run)
@@ -381,8 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     p_ui.add_argument("--host", default="127.0.0.1")
     p_ui.add_argument("--port", type=int, default=8765)
     p_ui.add_argument("--no-browser", action="store_true")
-    p_ui.add_argument("--anonymous", action="store_true",
-                      help="do not record operator identity in the audit log (R26)")
+    p_ui.add_argument(
+        "--anonymous",
+        action="store_true",
+        help="do not record operator identity in the audit log (R26)",
+    )
     p_ui.set_defaults(func=cmd_ui)
 
     p_data = sub.add_parser("datasets", help="show the data provenance registry")
@@ -394,10 +407,12 @@ def main(argv: list[str] | None = None) -> int:
     p_fetch.add_argument("--date", help="ISO date; defaults to tomorrow")
     p_fetch.add_argument("--days", type=int, default=1, help="how many days from --date")
     p_fetch.add_argument("--cache-dir", default="data/cache")
-    p_fetch.add_argument("--offline", action="store_true",
-                         help="report what is cached without fetching anything")
-    p_fetch.add_argument("--no-actuals", action="store_true",
-                         help="skip the weather archive (only forecasts)")
+    p_fetch.add_argument(
+        "--offline", action="store_true", help="report what is cached without fetching anything"
+    )
+    p_fetch.add_argument(
+        "--no-actuals", action="store_true", help="skip the weather archive (only forecasts)"
+    )
     p_fetch.set_defaults(func=cmd_fetch)
 
     p_daily = sub.add_parser("daily", help="the unattended daily job: fetch, plan, record")

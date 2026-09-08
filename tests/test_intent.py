@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from kasflex.intent import HOURS_PER_DAY, IntentSchemaError, IntervalIntent, Plan, flat_plan
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, True])
+def test_non_finite_or_boolean_numeric_intent_is_rejected(value):
+    with pytest.raises(IntentSchemaError):
+        IntervalIntent(hour=0, battery_power_kw=value)
+    with pytest.raises(IntentSchemaError):
+        IntervalIntent(hour=0, lighting_level=value)
 
 
 def test_roundtrip_json():

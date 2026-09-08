@@ -65,6 +65,9 @@ def default_config_path() -> Path:
         candidates.insert(0, Path(sys.executable).resolve().parent / "configs" / name)
         candidates.append(resource_root() / "configs" / name)
     else:
+        # Installed wheels carry a copy inside the package.  Source checkouts
+        # retain the editable top-level ``configs/`` directory.
+        candidates.append(Path(__file__).resolve().parent / "configs" / name)
         candidates.append(Path(__file__).resolve().parents[2] / "configs" / name)
 
     for candidate in candidates:

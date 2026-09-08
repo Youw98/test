@@ -33,10 +33,10 @@ from kasflex.data.cache import DataCache
 from kasflex.data.sources import (
     ENTSOE_META,
     OPENMETEO_ARCHIVE_META,
-    OPENMETEO_FORECAST_META,
     FetchError,
     fetch_entsoe_day_ahead,
     fetch_openmeteo,
+    openmeteo_source_for,
 )
 from kasflex.energy.dispatch import HourlyConditions
 from kasflex.resources import resolve_output
@@ -60,12 +60,12 @@ class DayData:
 
     @property
     def actuals_available(self) -> bool:
-        """False when the archive has not caught up with the day yet.
+        """False when the provisional historical archive has no rows for the day.
 
         A day planned this afternoon has no realised weather, so the run is scored
-        against the forecast and the result record says so. Treating that as if it
-        were a real out-of-sample score would quietly turn every forward-looking run
-        into an oracle result.
+        against the forecast and the result record says so. Even when present, the
+        current Open-Meteo archive is a historical-weather proxy rather than the
+        required KNMI measured series; it must not be labelled as that dataset.
         """
         return self.actual_temp_c is not None
 
@@ -177,8 +177,8 @@ def ensure_day(
             it is a configured value; update it when the market moves materially.
         api_key: ENTSO-E token. Defaults to ``ENTSOE_API_KEY`` in the environment.
         allow_network: When False, use only what is already cached.
-        want_actuals: Try to fetch realised weather from the archive. Harmless to
-            leave on: a day that has not happened yet simply has none.
+        want_actuals: Try to fetch the provisional historical-weather proxy from
+            the Open-Meteo archive. A day that has not happened yet has none.
 
     Raises:
         FetchError: if prices or forecast weather can be obtained from neither the
@@ -189,6 +189,7 @@ def ensure_day(
     site = f"{latitude:.3f}_{longitude:.3f}"
     iso = day.isoformat()
     sources: dict[str, str] = {}
+    forecast_meta = openmeteo_source_for(day)
 
     zone_kwargs = {"zone": entsoe_zone} if entsoe_zone else {}
     price_rows, sources["prices"] = _cached_or_fetch(
@@ -203,7 +204,7 @@ def ensure_day(
         cache,
         f"weather_forecast_{iso}_{site}",
         lambda: fetch_openmeteo(day, latitude=latitude, longitude=longitude, archive=False),
-        OPENMETEO_FORECAST_META,
+        forecast_meta,
         allow_network=allow_network,
         required=True,
     )
@@ -236,9 +237,7 @@ def cached_days(cache: DataCache, latitude: float, longitude: float) -> list[str
     """Dates for which both prices and forecast weather are cached, chronological."""
     site = f"{latitude:.3f}_{longitude:.3f}"
     entries = cache.entries()
-    dates = {
-        k.removeprefix("entsoe_da_") for k in entries if k.startswith("entsoe_da_")
-    }
+    dates = {k.removeprefix("entsoe_da_") for k in entries if k.startswith("entsoe_da_")}
     have_weather = {
         k.removeprefix("weather_forecast_").removesuffix(f"_{site}")
         for k in entries
@@ -282,6 +281,7 @@ def run_daily(
         allow_network=allow_network,
     )
     forecast, actual = data.conditions()
+    forecast_meta = openmeteo_source_for(target)
 
     result = run_scenario(
         scenario=f"{config.name}/daily",
@@ -296,9 +296,18 @@ def run_daily(
         brief=config.brief,
         seed=config.seed,
         provenance={
-            "data_source": "live",
+            "data_source": "external",
             "series": data.sources,
             "actuals_available": data.actuals_available,
+            "price_dataset": ENTSOE_META.dataset_key,
+            "forecast_weather_dataset": forecast_meta.dataset_key,
+            "scoring_weather_dataset": (
+                OPENMETEO_ARCHIVE_META.dataset_key if data.actuals_available else None
+            ),
+            "scoring_weather_is_measured": False,
+            "scored_against": (
+                "historical_weather_proxy" if data.actuals_available else "forecast"
+            ),
         },
     )
 
@@ -307,14 +316,13 @@ def run_daily(
     record["series_origin"] = data.sources
     if not data.actuals_available:
         record["note"] = (
-            "scored against the forecast: the weather archive has no realised data "
-            "for this day yet. Re-run after the day has passed for an out-of-sample "
-            "score."
+            "provisionally scored against the forecast: the weather archive has no "
+            "historical proxy for this day. This is not an out-of-sample result."
         )
 
     path = resolve_output(results_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as fh:
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
     return record
 
@@ -336,8 +344,9 @@ def build_history_from_cache(
     """
     from kasflex.forecast.history import MeteredDay
 
-    days = [d for d in cached_days(cache, config.latitude, config.longitude)
-            if d < up_to.isoformat()][-max_days:]
+    days = [
+        d for d in cached_days(cache, config.latitude, config.longitude) if d < up_to.isoformat()
+    ][-max_days:]
     out = []
     for iso in days:
         data = ensure_day(

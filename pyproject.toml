@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kasflex"
 version = "0.1.0"
-description = "Verified agentic energy management for greenhouse horticulture under electrical constraints"
+description = "Research simulator for inspected greenhouse energy planning under electrical constraints"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -27,6 +27,8 @@ classifiers = [
 dependencies = [
   "numpy>=1.26",
   "pyyaml>=6.0",
+  # Windows does not ship the IANA timezone database used by data.sources.
+  "tzdata>=2024.1; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
@@ -50,10 +52,11 @@ kasflex = "kasflex.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/kasflex"]
 
-# The interface is plain HTML, CSS and JS with no build step, shipped as package
-# data so `kasflex ui` works from an installed wheel.
+# Hatch includes files below ``src/kasflex`` (including the plain HTML/CSS/JS
+# interface) with the package.  The scenario lives outside that tree in a
+# checkout, so add one bundled copy for installed wheels.
 [tool.hatch.build.targets.wheel.force-include]
-"src/kasflex/ui/static" = "kasflex/ui/static"
+"configs" = "kasflex/configs"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

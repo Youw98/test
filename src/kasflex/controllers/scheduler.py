@@ -123,23 +123,30 @@ def score_plan(
         if interval.grid_export_kw > export_limit + 1e-6:
             violations.append(f"grid.export_limit@{intent.hour}")
 
-        soc = interval.battery_soc_kwh
+        soc = interval.battery_soc_requested_kwh
         if not (b.soc_min_kwh - 1e-6 <= soc <= b.soc_max_kwh + 1e-6):
             violations.append(f"battery.state_of_charge@{intent.hour}")
-        elif not (b.soc_min_kwh + soc_span <= soc <= b.soc_max_kwh - soc_span):
+        elif not (b.soc_min_kwh + soc_span <= interval.battery_soc_kwh <= b.soc_max_kwh - soc_span):
             margin_hits += 1
 
-        level = interval.buffer_level_kwh
+        level = interval.buffer_level_requested_kwh
         if not (buf.level_min_kwh - 1e-6 <= level <= buf.level_max_kwh + 1e-6):
             violations.append(f"buffer.level_bounds@{intent.hour}")
-        elif not (buf.level_min_kwh + buf_span <= level <= buf.level_max_kwh - buf_span):
+        elif not (
+            buf.level_min_kwh + buf_span
+            <= interval.buffer_level_kwh
+            <= buf.level_max_kwh - buf_span
+        ):
             margin_hits += 1
 
         if interval.heat_shortfall_kw > 1e-6:
             violations.append(f"heat.demand_met@{intent.hour}")
-        power = max(interval.battery_charge_kw, interval.battery_discharge_kw)
-        rating = min(b.max_charge_kw, b.max_discharge_kw, b.c_rate_power_kw)
-        if power > rating + 1e-6:
+        charge_bound = min(b.max_charge_kw, b.c_rate_power_kw)
+        discharge_bound = min(b.max_discharge_kw, b.c_rate_power_kw)
+        if (
+            interval.battery_charge_requested_kw > charge_bound + 1e-6
+            or interval.battery_discharge_requested_kw > discharge_bound + 1e-6
+        ):
             violations.append(f"battery.power_limit@{intent.hour}")
 
     crop = hub.crop
@@ -279,8 +286,9 @@ class OptimizingScheduler:
             self.final_cost_eur = best_score.cost_eur
             return best
 
-        rating = min(hub.battery.max_charge_kw, hub.battery.max_discharge_kw,
-                     hub.battery.c_rate_power_kw)
+        rating = min(
+            hub.battery.max_charge_kw, hub.battery.max_discharge_kw, hub.battery.c_rate_power_kw
+        )
 
         for sweep in range(self.max_sweeps):
             self.sweeps_used = sweep + 1
@@ -370,8 +378,7 @@ def _with(plan: Plan, hour: int, **changes) -> Plan:
     """A copy of ``plan`` with one hour's intent changed. Revision is not bumped:
     these are search candidates, not revisions offered to a human."""
     edited = tuple(
-        dataclasses.replace(iv, **changes) if iv.hour == hour else iv
-        for iv in plan.intervals
+        dataclasses.replace(iv, **changes) if iv.hour == hour else iv for iv in plan.intervals
     )
     return dataclasses.replace(plan, intervals=edited)
 
@@ -413,9 +420,7 @@ class LearnedPlanner:
     def plan(self, context: PlanningContext) -> Plan:
         """Predict tomorrow's demand, then search for the cheapest feasible schedule."""
         conditions = self._conditions(context)
-        seed = RuleBasedPlanner().plan(
-            dataclasses.replace(context, forecast=tuple(conditions))
-        )
+        seed = RuleBasedPlanner().plan(dataclasses.replace(context, forecast=tuple(conditions)))
         best = self.scheduler.optimise(seed, context.hub, conditions)
 
         self.last_diagnostics = {
@@ -423,9 +428,7 @@ class LearnedPlanner:
             "sweeps": float(self.scheduler.sweeps_used),
             "seed_cost_eur": round(self.scheduler.start_cost_eur, 2),
             "optimised_cost_eur": round(self.scheduler.final_cost_eur, 2),
-            "saving_eur": round(
-                self.scheduler.start_cost_eur - self.scheduler.final_cost_eur, 2
-            ),
+            "saving_eur": round(self.scheduler.start_cost_eur - self.scheduler.final_cost_eur, 2),
             "safety_margin": self.scheduler.margin_used,
         }
         best = _explain(best, conditions, self.scheduler.margin_used)

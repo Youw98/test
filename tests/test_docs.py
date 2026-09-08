@@ -24,7 +24,9 @@ SRC = ROOT / "src" / "kasflex"
 
 
 def read(path: Path) -> str:
-    return path.read_text()
+    # Be explicit on Windows, where the locale codec is not necessarily UTF-8 and
+    # would silently mojibake the status markers this module deliberately checks.
+    return path.read_text(encoding="utf-8")
 
 
 # --- the module map must name modules that exist ---------------------------

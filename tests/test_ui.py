@@ -197,13 +197,49 @@ def test_the_checker_catches_what_disabling_it_lets_through(ui):
 # --- decisions (R25, R26) --------------------------------------------------
 
 
+def _rejection_for(proposal, overrides):
+    return {
+        "decision": "reject",
+        "overrides": overrides,
+        "decision_token": proposal["decision_token"],
+        "plan_fingerprint": proposal["plan_fingerprint"],
+    }
+
+
+def test_every_rendered_plan_has_a_rejection_capability(ui, base_run):
+    assert base_run["decision_token"]
+    assert base_run["plan_fingerprint"]
+
+    unverified = ui.run({"planner": "rule-based", "checker.enabled": False})
+    assert unverified["approval_token"] is None
+    assert unverified["decision_token"]
+    assert unverified["plan_fingerprint"]
+
+    edited = [{**row, "heat_source": "none"} for row in base_run["plan"]]
+    rejected = ui.verify({"planner": "rule-based"}, edited)
+    assert rejected["accepted"] is False
+    assert rejected["approval_token"] is None
+    assert rejected["decision_token"]
+    assert rejected["plan_fingerprint"]
+
+
 def test_a_decision_is_recorded(tmp_path):
     server = UiServer(config_path=CONFIG)
     server.base = type(server.base)(
         **{**server.base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
     )
-    server.decide({"decision": "approve", "comment": "looks right",
-                   "seconds_to_decide": 12.5, "operator": "grower-1"})
+    overrides = {"planner": "rule-based"}
+    proposal = server.run(overrides)
+    server.decide(
+        {
+            "decision": "approve",
+            "comment": "looks right",
+            "seconds_to_decide": 12.5,
+            "operator": "grower-1",
+            "overrides": overrides,
+            "approval_token": proposal["approval_token"],
+        }
+    )
 
     from kasflex.oversight import AuditLog
 
@@ -211,7 +247,132 @@ def test_a_decision_is_recorded(tmp_path):
     assert entries[-1]["kind"] == "human_decision_ui"
     assert entries[-1]["payload"]["decision"] == "approve"
     assert entries[-1]["payload"]["seconds_to_decide"] == 12.5
+    assert entries[-1]["payload"]["plan_fingerprint"] == proposal["plan_fingerprint"]
     assert entries[-1]["operator"] == "grower-1"
+
+
+def test_approval_requires_a_current_matching_verified_plan(tmp_path):
+    server = UiServer(config_path=CONFIG)
+    server.base = type(server.base)(
+        **{**server.base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
+    )
+    overrides = {"planner": "rule-based"}
+    proposal = server.run(overrides)
+
+    with pytest.raises(ApiError, match="stale or the plan was not verified"):
+        server.decide({"decision": "approve", "overrides": overrides})
+
+    with pytest.raises(ApiError, match="scenario changed"):
+        server.decide(
+            {
+                "decision": "approve",
+                "overrides": {"planner": "learned"},
+                "approval_token": proposal["approval_token"],
+            }
+        )
+
+    # A mismatch consumes the capability: the operator must verify again instead
+    # of retrying approval against a snapshot whose context no longer matches.
+    with pytest.raises(ApiError, match="stale or the plan was not verified"):
+        server.decide(
+            {
+                "decision": "approve",
+                "overrides": overrides,
+                "approval_token": proposal["approval_token"],
+            }
+        )
+
+
+def test_approval_token_is_one_use(tmp_path):
+    server = UiServer(config_path=CONFIG)
+    server.base = type(server.base)(
+        **{**server.base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
+    )
+    overrides = {"planner": "rule-based"}
+    proposal = server.run(overrides)
+    decision = {
+        "decision": "approve",
+        "overrides": overrides,
+        "approval_token": proposal["approval_token"],
+    }
+
+    assert server.decide(decision)["recorded"] is True
+    with pytest.raises(ApiError, match="stale or the plan was not verified"):
+        server.decide(decision)
+
+
+def test_rejection_requires_the_current_plan_snapshot(tmp_path):
+    server = UiServer(config_path=CONFIG)
+    server.base = type(server.base)(
+        **{**server.base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
+    )
+    overrides = {"planner": "rule-based"}
+
+    proposal = server.run(overrides)
+    with pytest.raises(ApiError, match="stale or does not identify"):
+        server.decide(
+            {
+                "decision": "reject",
+                "overrides": overrides,
+                "plan_fingerprint": proposal["plan_fingerprint"],
+            }
+        )
+
+    proposal = server.run(overrides)
+    changed_scenario = {
+        **_rejection_for(proposal, overrides),
+        "overrides": {"planner": "learned"},
+    }
+    with pytest.raises(ApiError, match="scenario changed"):
+        server.decide(changed_scenario)
+    with pytest.raises(ApiError, match="stale or does not identify"):
+        server.decide(_rejection_for(proposal, overrides))
+
+    proposal = server.run(overrides)
+    wrong_plan = {
+        **_rejection_for(proposal, overrides),
+        "plan_fingerprint": "not-the-rendered-plan",
+    }
+    with pytest.raises(ApiError, match="fingerprint does not match"):
+        server.decide(wrong_plan)
+    with pytest.raises(ApiError, match="stale or does not identify"):
+        server.decide(_rejection_for(proposal, overrides))
+
+
+def test_rejection_token_is_one_use_and_records_its_plan(tmp_path):
+    server = UiServer(config_path=CONFIG)
+    server.base = type(server.base)(
+        **{**server.base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
+    )
+    overrides = {"planner": "naive", "checker.enabled": False}
+    proposal = server.run(overrides)
+    rejection = _rejection_for(proposal, overrides)
+
+    assert proposal["approval_token"] is None
+    assert server.decide(rejection)["recorded"] is True
+    with pytest.raises(ApiError, match="stale or does not identify"):
+        server.decide(rejection)
+
+    from kasflex.oversight import AuditLog
+
+    entry = AuditLog(tmp_path / "audit.jsonl").entries()[-1]
+    assert entry["payload"]["decision"] == "reject"
+    assert entry["payload"]["plan_fingerprint"] == proposal["plan_fingerprint"]
+    assert entry["payload"]["verification_source"] == "generated"
+
+
+def test_rendering_a_new_plan_stales_the_previous_rejection(tmp_path):
+    server = UiServer(config_path=CONFIG)
+    server.base = type(server.base)(
+        **{**server.base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
+    )
+    overrides = {"planner": "rule-based"}
+    old = server.run(overrides)
+    current = server.run(overrides)
+
+    with pytest.raises(ApiError, match="stale or does not identify"):
+        server.decide(_rejection_for(old, overrides))
+    assert server.decide(_rejection_for(current, overrides))["recorded"] is True
 
 
 def test_anonymous_mode_withholds_the_operator(tmp_path):
@@ -219,7 +380,9 @@ def test_anonymous_mode_withholds_the_operator(tmp_path):
     server.base = type(server.base)(
         **{**server.base.__dict__, "audit_path": str(tmp_path / "a.jsonl")}
     )
-    server.decide({"decision": "reject", "operator": "grower-1"})
+    overrides = {"planner": "rule-based"}
+    proposal = server.run(overrides)
+    server.decide({**_rejection_for(proposal, overrides), "operator": "grower-1"})
 
     from kasflex.oversight import AuditLog
 
@@ -272,8 +435,10 @@ def _get(url: str) -> tuple[int, bytes]:
 
 def _post(url: str, payload: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
-        url, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST",
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=120) as r:
@@ -292,7 +457,7 @@ def test_the_page_and_its_assets_are_served(live):
 def test_the_page_carries_the_permanent_simulation_notice(live):
     """R31. If this ever disappears the interface is misrepresenting itself."""
     _, body = _get(live + "/")
-    text = " ".join(body.decode().split())   # the source wraps this sentence
+    text = " ".join(body.decode().split())  # the source wraps this sentence
     assert "Simulation." in text
     assert "Not validated for operational use" in text
     assert "hidden" not in text.split('id="sim-notice"')[1][:120]
@@ -326,8 +491,10 @@ def test_an_unknown_endpoint_returns_404(live):
 
 def test_a_malformed_body_returns_400(live):
     request = urllib.request.Request(
-        live + "/api/run", data=b"{not json",
-        headers={"Content-Type": "application/json"}, method="POST",
+        live + "/api/run",
+        data=b"{not json",
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     try:
         urllib.request.urlopen(request, timeout=30)

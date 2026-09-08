@@ -92,10 +92,10 @@ approval, and the experiment harness. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 The one structural departure from the Alliander proposal's Figure 1 is that
 **safety is not a sidecar**. There, the safety and validation layer sits beside the
-agents. Here it sits *between* the planner and everything downstream: no intent
-reaches an actuator without a verdict from pure, deterministic code that has no
-dependency on the planner. That is what makes the headline table a measurement
-rather than an assertion.
+agents. Here it sits *between* the planner and the simulation's downstream dispatch:
+no intent reaches simulated execution without a verdict from pure, deterministic
+code that has no dependency on the planner. No physical actuator is connected. That
+is what makes the headline table a test of the apparatus rather than an assertion.
 
 ---
 
@@ -108,14 +108,16 @@ approval (R22–R25) are never cut: they carry the research contribution.
 ### Stage 0 — Skeleton that runs end to end ✅ built
 
 Intent schema, energy hub, dispatch, checker, rule-based baseline, runner,
-experiment matrix, CLI, FAIR metadata. Tested end to end, offline.
+experiment matrix, CLI, FAIR metadata. Tested end to end, offline on deterministic
+synthetic inputs.
 
 *Complete when:* `kasflex experiment` runs offline on a bare clone. **It does.**
 
 ### Stage 1 — GreenLight-Gym2, validated against AGC ⬜ next
 
-The worker exists and drives the real model today; what is missing is the
-validation.
+The process adapter and worker exist and can call GreenLight-Gym2 when its separate
+environment is installed. Configuration against the reference compartment,
+end-to-end integration evidence and validation are still missing.
 
 - Download AGC 2nd edition (D1). Read Hemming et al., *Sensors* 2020, **first**.
 - Configure GL-Gym to the AGC compartment: floor area, lamp power, heating capacity,
@@ -137,6 +139,11 @@ limits. Machine-readable rejections carrying constraint, interval, actual value 
 feasible bound. A test asserts every registered check has a deliberately invalid
 plan exercising it.
 
+Dispatch now keeps two storage tracks: physically applied flows remain within
+inventory, power and capacity limits, while explicit `*_requested_*` fields retain
+the unsaturated counterfactual for the checker. This keeps energy conservation
+physical without hiding an infeasible request in the checker-disabled arm.
+
 *Complete when:* every constructed invalid plan is detected. **It is.**
 
 *Remaining:* the crop climate bands are `PROJECTED` and currently run against the
@@ -149,6 +156,10 @@ manifest, deterministic synthetic fallback, ENTSO-E day-ahead and Open-Meteo
 forecast/archive fetchers, and the unattended daily job (`kasflex fetch`,
 `kasflex daily`) with cron, systemd and GitHub Actions setups in `deploy/`.
 
+The real-data assembly is currently used by `kasflex daily`. The standard
+`kasflex run`, browser UI and experiment matrix still generate synthetic days;
+having a populated cache does not yet make those paths real-data experiments.
+
 Fetching is written with stdlib `urllib` rather than `entsoe-py`, so a scheduled job
 needs no pandas. Both parsers handle the traps that produce a plausible-but-wrong
 price curve: ENTSO-E quotes EUR/MWh and omits repeated positions, and a Dutch
@@ -160,7 +171,8 @@ To do:
   built in blocks all three hosts, so request construction is written from the
   published API contracts and is unverified. Everything downstream of the response
   is tested against recorded fixtures. Run `kasflex fetch --date <yesterday>` by
-  hand and check the output before trusting a schedule.
+  hand and check source, units, timestamps and row counts before interpreting a
+  daily record.
 - TTF gas: no free public API, so it is a configured value rather than a fetch.
 - A GL-Gym `BasePriceModel` subclass keyed on `(day_of_year, hour_of_day)`, plus the
   `GreenhouseReward` subclass described in §2 — needed to put real prices inside the
@@ -215,12 +227,13 @@ forecasts.
 than planner skill. That is valuable once the AI planner exists and worthless
 before it.
 
-### Stage 6 — Browser interface ✅ built
+### Stage 6 — Browser interface 🔶 built, human-use evidence pending
 
 Plan with per-interval reasoning; approve, edit and reject; re-verification on edit;
 all controllers compared on one scenario with violation counts; cost and crop
 outcome first, energy units second; a permanent "simulation, not validated for
-operational use" notice; runs offline from cached data.
+operational use" notice; runs offline on deterministic synthetic inputs. The data
+cache and daily pipeline are separate until stage 3 is completed end to end.
 
 Built on `http.server` from the standard library rather than a web framework: the
 requirement is "browser-based, no installation", and adding FastAPI plus uvicorn to
@@ -232,8 +245,21 @@ covered by tests in `tests/test_ui.py`:
 * A failed re-verification left the previous **"accepted"** badge on screen, so an
   operator could see a verdict that no longer applied to the plan in front of them.
 * A run with the checker **switched off** still read "accepted", in green, beside a
-  card reporting 66 violations. It now reads "not verified" and approval is
+  card reporting many violations. It now reads "not verified" and approval is
   disabled, because there is nothing to approve.
+
+Every generated and re-verified plan now receives a one-use decision token tied to
+the exact plan fingerprint and scenario overrides. Only checker-enabled, accepted
+plans also receive an approval token. Editing the plan or changing the scenario
+makes both capabilities stale; an unsafe plan can be rejected against its exact
+snapshot but cannot be approved. This protects the integrity of the recorded review
+even if the endpoint is called directly.
+
+**Important limit:** `UiServer.run` completes the simulated actual-day run before
+the browser records a person's decision. The decision is therefore a review of a
+completed simulation preview, not an execution or actuation gate. Tokens are
+global, in memory and single-user, with no authentication, TTL or durable session.
+That is acceptable for this localhost demonstrator and not for production control.
 
 *Complete when:* an unfamiliar user runs a scenario unaided in 10 minutes.
 **Not yet tested on an unfamiliar user** — that is the remaining gap, and it needs
@@ -269,11 +295,11 @@ now even though the stage is not.
 | R6 | Identical seed gives identical results | ✅ | `tests/test_reproducibility.py` |
 | R7 | Rule-based baseline at intent level | ✅ | `controllers/rule_based.py` |
 | R8 | MPC reference via CasADi | ⬜ stage 5 | `controllers/mpc.py` |
-| — | Demand forecasting from historical data | ✅ added | `kasflex/forecast/` |
+| — | Demand forecasting from historical data | 🔶 simulator-generated history only; metered demand absent | `kasflex/forecast/` |
 | — | Cost-optimising scheduler | ✅ added | `controllers/scheduler.py` |
-| R9 | AI planner, documented schema | ✅ | `controllers/llm.py`, `intent.py` |
+| R9 | AI planner, documented schema | 🔶 schema, trace replay and fake transport built; live provider call missing | `controllers/llm.py`, `intent.py` |
 | R10 | Deterministic low-level controller | ✅ | worker + `dispatch.py` |
-| R11 | Three or more models by configuration | ✅ | `LlmPlanner.model` |
+| R11 | Three or more models by configuration | 🔶 model labels accepted; three live models not exercised | `LlmPlanner.model` |
 | R12 | Record traces, replay without API | ✅ | `TraceStore` |
 | R13 | Verify every plan deterministically | ✅ | `checker/rules.py` |
 | R14 | Electrical limits | ✅ | 4 checks |
@@ -287,19 +313,19 @@ now even though the stage is not.
 | R22 | Plan with reasoning; approve/edit/reject | ✅ | `oversight.py`, UI |
 | R23 | Re-verify user edits | ✅ | `run.py` |
 | R24 | Plain-language brief | ✅ | `OperatorBrief` |
-| R25 | Append-only log | ✅ | `AuditLog` |
-| R26 | Interaction metrics, anonymous mode | ✅ | UI records decision time |
+| R25 | Append-only log | 🔶 core workflow is detailed; browser logs final decisions but not each draft edit/re-verdict | `AuditLog` |
+| R26 | Interaction metrics, anonymous mode | 🔶 decision time and anonymous mode built; informed-consent gate missing | UI decision log |
 | R27 | Browser-based, 10 minutes unaided | 🔶 built, untested on a real user | `kasflex ui` |
 | R28 | Cost and crop first | ✅ | `ui/static/index.html` |
-| R29 | All controllers compared | ✅ | `experiment.py`, UI compare |
-| R30 | Fully offline from cache | ✅ | `tests/test_end_to_end.py` |
+| R29 | All controllers compared | 🔶 MPC row reports `MpcNotImplementedError` | `experiment.py`, UI compare |
+| R30 | Fully offline from cache | 🔶 synthetic runs are offline; cached external data are not wired into main run/UI/experiment | `tests/test_end_to_end.py`, `data/pipeline.py` |
 | R31 | Permanent simulation notice | ✅ | `cli.py`, UI banner |
 | R32 | Matrix unattended from CLI | ✅ | `kasflex experiment` |
 | R33 | One structured record per run | ✅ | `RunResult.to_record()` |
 | R34 | OSI licence, docs, CITATION.cff, provenance | ✅ | repository root |
 | R35 | Regenerate every figure from a script | 🔶 records yes, figures pending | `make reproduce` |
 
-✅ 32 · 🔶 4 · ⬜ 1  (37 rows, counted from the table above)
+✅ 25 · 🔶 11 · ⬜ 1  (37 rows, counted from the table above)
 
 ---
 
@@ -357,9 +383,9 @@ but the standard remedy for it. The checker's messages already gesture at this
 | Fixture planner numbers reported as an AI result | Medium | Named `naive`, plan carries a disclaiming note, ADR-0010 |
 | Open-Meteo forecast archive does not cover chosen dates | Medium | Verify coverage before fixing dates; two-period rule, ADR-0004 |
 | Scale confusion between 96 m² and 5 ha | High | Per-m² reported always; scale factor in worker diagnostics |
-| Checker rejects everything, AI never gets a plan through | Medium | Fallback to baseline (R18); baseline verified clean across 40 scenario variants |
+| Checker rejects everything, AI never gets a plan through | Medium | Fallback to a separately verified baseline (R18); broaden the documented scenario sweep before drawing findings |
 | Intent vocabulary too coarse to beat the baseline | Medium | Report as a ceiling, not as planner failure, ADR-0003 |
-| ENTSO-E outage during a demonstration | Low | Nothing reads a live API at run time (R30) |
+| ENTSO-E outage during a demonstration | Low | Use the synthetic demonstrator or a previously verified cache; the daily job may fetch on a cache miss |
 
 ---
 

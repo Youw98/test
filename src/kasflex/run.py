@@ -21,6 +21,8 @@ clean and the headline table would be meaningless.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -82,9 +84,13 @@ class RunResult:
             "fell_back_to_baseline": self.fell_back_to_baseline,
             "human_decision": self.human_decision,
             "accepted": self.accepted,
+            "plan": self.plan.to_dict(),
+            "verdict": self.verdict.to_dict(),
             "realised_violations_total": len(self.realised_violations),
             "realised_violations_hard": self.realised_hard_violations,
             "realised_violations_by_category": by_category,
+            "realised_violations": list(self.realised_violations),
+            "hub": dataclasses.asdict(self.dispatch.hub),
             **self.metrics,
             "provenance": self.provenance,
         }
@@ -102,6 +108,17 @@ def _conditions_with_demand(
         )
         for i, c in enumerate(base)
     )
+
+
+def _conditions_digest(series: tuple[HourlyConditions, ...]) -> str:
+    """Stable content hash for the exact series used by a recorded run."""
+    payload = json.dumps(
+        [dataclasses.asdict(row) for row in series],
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def run_scenario(
@@ -173,6 +190,8 @@ def run_scenario(
     # --- plan / verify / revise loop (R18) --------------------------------
     plan: Plan | None = None
     verdict: Verdict | None = None
+    plan_conditions: tuple[HourlyConditions, ...] | None = None
+    plan_outcome: DayOutcome | None = None
     revisions_used = 0
     fell_back = False
 
@@ -203,13 +222,19 @@ def run_scenario(
             revisions_used = attempt
             continue
 
+        # Crop projections must follow the candidate being judged. Reusing the
+        # nominal baseline projection here can make a plan that removes all CO2 or
+        # light appear safe simply because the baseline supplied it.
+        candidate_outcome = greenhouse.simulate_day(candidate, forecast, hub.floor_area_m2)
+        candidate_conditions = _conditions_with_demand(forecast, candidate_outcome)
         candidate_verdict = checker.verify(
-            candidate, forecast_conditions, forecast_outcome.projection()
+            candidate, candidate_conditions, candidate_outcome.projection()
         )
         log("plan_proposed", {"attempt": attempt, "plan": candidate.to_dict()})
         log("verdict", {"attempt": attempt, "verdict": candidate_verdict.to_dict()})
 
         plan, verdict = candidate, candidate_verdict
+        plan_conditions, plan_outcome = candidate_conditions, candidate_outcome
         revisions_used = attempt
         if candidate_verdict.accepted:
             break
@@ -219,30 +244,58 @@ def run_scenario(
         plan = baseline.plan(
             PlanningContext(date=date, forecast=forecast_conditions, hub=hub, brief=brief)
         )
-        verdict = checker.verify(plan, forecast_conditions, forecast_outcome.projection())
-        log("fallback_to_baseline", {"after_revisions": revisions_used,
-                                     "accepted": verdict.accepted})
+        plan_outcome = greenhouse.simulate_day(plan, forecast, hub.floor_area_m2)
+        plan_conditions = _conditions_with_demand(forecast, plan_outcome)
+        verdict = checker.verify(plan, plan_conditions, plan_outcome.projection())
+        log(
+            "fallback_to_baseline",
+            {"after_revisions": revisions_used, "accepted": verdict.accepted},
+        )
 
     assert plan is not None and verdict is not None
+    assert plan_conditions is not None and plan_outcome is not None
 
     # --- human oversight (R22, R23) ---------------------------------------
     decision = approver.review(plan, verdict)
-    log("human_decision", {"decision": decision.decision.value, "comment": decision.comment,
-                           "seconds_to_decide": decision.seconds_to_decide})
+    log(
+        "human_decision",
+        {
+            "decision": decision.decision.value,
+            "comment": decision.comment,
+            "seconds_to_decide": decision.seconds_to_decide,
+        },
+    )
     if decision.decision is Decision.EDIT:
         plan = decision.plan
-        verdict = checker.verify(plan, forecast_conditions, forecast_outcome.projection())
+        plan_outcome = greenhouse.simulate_day(plan, forecast, hub.floor_area_m2)
+        plan_conditions = _conditions_with_demand(forecast, plan_outcome)
+        verdict = checker.verify(plan, plan_conditions, plan_outcome.projection())
         log("reverified_after_edit", {"verdict": verdict.to_dict()})
 
-    accepted = decision.decision is not Decision.REJECT
+    # A human edit is not a waiver. If verification is enabled, a rejected edit
+    # must never reach execution; falling back is safer and keeps the run complete.
+    accepted = decision.decision is not Decision.REJECT and (
+        not checker_config.enabled or verdict.accepted
+    )
     if not accepted:
         # A rejected plan is never executed. The day falls back to the baseline,
         # which is what an operator would actually do.
         plan = baseline.plan(
             PlanningContext(date=date, forecast=forecast_conditions, hub=hub, brief=brief)
         )
+        plan_outcome = greenhouse.simulate_day(plan, forecast, hub.floor_area_m2)
+        plan_conditions = _conditions_with_demand(forecast, plan_outcome)
+        verdict = checker.verify(plan, plan_conditions, plan_outcome.projection())
         fell_back = True
-        log("human_rejected_using_baseline", {})
+        log(
+            "human_rejected_using_baseline",
+            {
+                "reason": "operator rejection"
+                if decision.decision is Decision.REJECT
+                else "edited plan failed re-verification",
+                "fallback_verdict": verdict.to_dict(),
+            },
+        )
 
     # --- execute against the actuals --------------------------------------
     realised_outcome = greenhouse.simulate_day(plan, actual, hub.floor_area_m2)
@@ -289,9 +342,12 @@ def run_scenario(
         provenance={
             "greenhouse_validated": realised_outcome.validated,
             "data_source": (provenance or {}).get("data_source", "synthetic"),
+            "forecast_sha256": _conditions_digest(forecast),
+            "actual_sha256": _conditions_digest(actual),
             **(provenance or {}),
         },
     )
-    log("run_finished", {"metrics": metrics,
-                         "realised_violations": len(result.realised_violations)})
+    log(
+        "run_finished", {"metrics": metrics, "realised_violations": len(result.realised_violations)}
+    )
     return result

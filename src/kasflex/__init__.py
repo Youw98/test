@@ -1,11 +1,12 @@
-"""KasFlex: verified agentic energy management for greenhouse horticulture.
+"""KasFlex: a research simulator for inspected greenhouse energy planning.
 
-An AI planner proposes one day of hourly energy intent. A deterministic safety
-checker verifies it against electrical, asset and crop limits. A person approves it.
-The day is then simulated and compared against conventional control.
+A planner proposes one day of hourly energy intent. A deterministic checker tests
+it against electrical, asset and projected crop limits. A person's review is
+recorded. The day is simulated and compared with conventional control.
 
-The system exists to produce one measurement: what verification and human oversight
-are worth, in operating cost and in limit violations.
+The apparatus is designed to measure how verification and recorded human review
+change simulated cost and limit violations. It does not establish that value until
+the model, data path and experimental protocol have been validated.
 
 Simulation only. No physical greenhouse equipment is connected at any point.
 """

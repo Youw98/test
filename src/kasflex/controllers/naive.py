@@ -25,7 +25,7 @@ from kasflex.intent import IntervalIntent, Plan
 
 @dataclass
 class NaivePlanner:
-    """Greedy on price, blind to every constraint."""
+    """Deliberately poor, constraint-blind fixture for the negative-control arm."""
 
     name: str = "naive"
     light_hours: int = 14
@@ -34,23 +34,27 @@ class NaivePlanner:
     both have something to catch."""
 
     def plan(self, context: PlanningContext) -> Plan:
-        cheap = set(context.cheapest_hours(self.light_hours))
+        cheap = set(context.cheapest_hours(4))
         dear = set(context.dearest_hours(4))
+        expensive_light = set(context.dearest_hours(self.light_hours))
         intervals = []
         for c in context.forecast:
             hour = c.hour
             intervals.append(
                 IntervalIntent(
                     hour=hour,
-                    heat_source="buffer" if hour in dear else "boiler",
-                    lighting_level=1.0 if hour in cheap else 0.0,
+                    heat_source="boiler",
+                    lighting_level=1.0 if hour in expensive_light else 0.0,
                     battery=(
-                        "charge" if hour in cheap else "discharge" if hour in dear else "idle"
+                        "charge" if hour in dear else "discharge" if hour in cheap else "idle"
                     ),
                     battery_power_kw=self.battery_power_kw if hour in (cheap | dear) else 0.0,
-                    chp_mode="max_export" if hour in dear else "off",
+                    chp_mode="off",
                     co2_source="liquid" if c.irradiance_w_m2 > 20 else "none",
-                    reasoning=f"price {c.power_price_eur_kwh:.3f}: go flat out on the cheap hours",
+                    reasoning=(
+                        f"price {c.power_price_eur_kwh:.3f}: deliberately poor "
+                        f"negative-control schedule"
+                    ),
                 )
             )
         return Plan(

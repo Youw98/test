@@ -34,6 +34,13 @@ def test_default_config_exists_and_loads():
     assert ScenarioConfig.from_yaml(path).name
 
 
+def test_wheel_config_is_bundled_without_duplicate_static_force_include():
+    """Keep the wheel installable and its default scenario self-contained."""
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert '"configs" = "kasflex/configs"' in pyproject
+    assert '"src/kasflex/ui/static" = "kasflex/ui/static"' not in pyproject
+
+
 def test_config_can_be_overridden_by_environment(monkeypatch, tmp_path):
     target = tmp_path / "mine.yaml"
     target.write_text("name: x\ndate: '2023-01-01'\n")
@@ -80,8 +87,7 @@ def test_the_packaging_spec_ships_the_interface(name):
 def test_the_spec_declares_the_runtime_selected_imports():
     """Planners and models are chosen by name, so nothing imports them statically."""
     spec = (Path(__file__).resolve().parents[1] / "packaging" / "kasflex.spec").read_text()
-    for module in ("kasflex.controllers", "kasflex.forecast", "kasflex.adapters",
-                   "kasflex.data"):
+    for module in ("kasflex.controllers", "kasflex.forecast", "kasflex.adapters", "kasflex.data"):
         assert module in spec, (
             f"{module} is selected by name at runtime and must be a hidden import, "
             f"or the packaged build fails the moment someone picks one"

@@ -1,134 +1,318 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KasFlex</title>
-<link rel="stylesheet" href="/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102a2a">
+  <title>KasFlex Decision Cockpit</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
-<div id="sim-notice" role="note">
-  <strong>Simulation.</strong> No greenhouse equipment is connected. Not validated for
-  operational use — do not act on these figures.
+<a class="skip-link" href="#workspace">Skip to the plan</a>
+
+<div id="sim-notice" role="note" aria-label="Simulation status">
+  <span class="notice-mark">SIM</span>
+  <span>
+    <strong>Simulation.</strong> Research use only. No greenhouse equipment is connected.
+    Not validated for operational use — do not act on these figures.
+  </span>
+  <span class="notice-tail">Research preview</span>
 </div>
 
-<header>
-  <h1>KasFlex</h1>
-  <p class="sub">Plan a day of greenhouse energy use, verify it, decide on it.</p>
+<header class="app-header">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 42 42" role="img">
+        <path d="M5 19.5 21 6l16 13.5V36H5z" />
+        <path d="M21 6v30M10.5 15h21M13 36V20l8-7 8 7v16" />
+      </svg>
+    </span>
+    <span>
+      <strong class="brand-name">KasFlex</strong>
+      <span class="brand-sub">Decision Cockpit</span>
+    </span>
+  </div>
+
+  <div class="header-context" aria-label="Application context">
+    <span class="context-pill"><span class="dot dot-online"></span>Local &amp; offline</span>
+    <span class="context-pill" id="header-data">Synthetic data</span>
+    <span class="context-pill context-pill-strong" id="header-scenario">Westland winter</span>
+  </div>
+
+  <button id="scenario-toggle" class="icon-button scenario-toggle" type="button"
+          aria-controls="settings" aria-expanded="false">
+    <span aria-hidden="true">☰</span><span>Scenario</span>
+  </button>
 </header>
 
-<main>
-  <!-- ---------------------------------------------------------- settings -->
-  <aside id="settings">
-    <div class="panel-head">
-      <h2>Scenario</h2>
-      <button id="reset" class="link" type="button">Reset</button>
+<div id="drawer-scrim" class="drawer-scrim" hidden></div>
+
+<main class="app-shell">
+  <aside id="settings" aria-label="Scenario settings">
+    <div class="settings-scroll">
+      <div class="panel-head scenario-head">
+        <div>
+          <span class="eyebrow">Case setup</span>
+          <h1 id="scenario-title">Westland winter</h1>
+          <p id="scenario-name" class="scenario-path"></p>
+        </div>
+        <div class="panel-actions">
+          <button id="reset" class="text-button" type="button">Reset</button>
+          <button id="scenario-close" class="icon-button close-button" type="button"
+                  aria-label="Close scenario settings">×</button>
+        </div>
+      </div>
+
+      <div class="scenario-callout">
+        <span class="callout-icon" aria-hidden="true">24h</span>
+        <p><strong>One day, one decision.</strong><br>Set the case, generate intent, verify, then record a human decision.</p>
+      </div>
+
+      <form id="settings-form" novalidate></form>
     </div>
-    <p class="muted" id="scenario-name"></p>
-    <form id="settings-form"></form>
-    <div class="actions">
-      <button id="run" type="button" class="primary">Plan the day</button>
-      <button id="compare" type="button">Compare planners</button>
+
+    <div class="scenario-actionbar">
+      <div class="change-line">
+        <span id="settings-state">Default scenario</span>
+        <span id="elapsed"></span>
+      </div>
+      <button id="run" type="button" class="button button-primary button-large">
+        <span>Generate day plan</span><span aria-hidden="true">→</span>
+      </button>
+      <button id="compare" type="button" class="button button-secondary">
+        Compare research conditions
+      </button>
     </div>
-    <p class="muted small" id="elapsed"></p>
   </aside>
 
-  <!-- ----------------------------------------------------------- results -->
-  <section id="results">
-
-    <div id="empty" class="card placeholder">
-      <p>Choose your settings and press <strong>Plan the day</strong>.</p>
-      <p class="muted small">Everything runs locally. Nothing is sent anywhere.</p>
+  <section id="workspace" class="workspace" aria-live="polite" aria-busy="false">
+    <div id="error" class="error-panel" role="alert" hidden>
+      <div class="error-icon" aria-hidden="true">!</div>
+      <div><strong>Something needs attention</strong><p id="error-text"></p></div>
+      <button id="error-close" class="icon-button" type="button" aria-label="Dismiss error">×</button>
     </div>
 
-    <div id="error" class="card error" hidden></div>
+    <section id="empty" class="welcome-panel">
+      <div class="welcome-copy">
+        <span class="eyebrow">Day-ahead flexibility lab</span>
+        <h2>Make the trade-off visible before you trust the plan.</h2>
+        <p>
+          KasFlex compares energy intent, crop outcomes and hard limits on the same
+          simulated day. The verifier decides what is permitted. You decide what is wanted.
+        </p>
+        <div class="welcome-actions">
+          <button id="empty-run" class="button button-primary button-large" type="button">
+            Generate the default plan <span aria-hidden="true">→</span>
+          </button>
+          <button id="empty-settings" class="button button-ghost" type="button">Review scenario</button>
+        </div>
+      </div>
 
-    <!-- outcome first: cost and crop, then energy (R28) -->
+      <div class="process-card" aria-label="KasFlex workflow">
+        <div class="process-step"><span>01</span><div><strong>Plan</strong><small>Hourly energy intent</small></div></div>
+        <div class="process-line"></div>
+        <div class="process-step"><span>02</span><div><strong>Verify</strong><small>Deterministic constraints</small></div></div>
+        <div class="process-line"></div>
+        <div class="process-step"><span>03</span><div><strong>Decide</strong><small>Human review and record</small></div></div>
+        <div class="process-line"></div>
+        <div class="process-step"><span>04</span><div><strong>Compare</strong><small>Same case, every condition</small></div></div>
+      </div>
+
+      <div class="principle-grid">
+        <article><span class="principle-mark">A</span><h3>Fair by construction</h3><p>Every controller emits the same hourly intent and sees the same forecast.</p></article>
+        <article><span class="principle-mark">B</span><h3>Safety is separate</h3><p>The deterministic checker never depends on the planner it judges.</p></article>
+        <article><span class="principle-mark">C</span><h3>Honest evidence</h3><p>Scale, period, model status and data origin stay attached to every result.</p></article>
+      </div>
+    </section>
+
     <div id="outcome" hidden>
-      <div class="cards">
-        <div class="card stat">
-          <span class="label">Cost of the day</span>
-          <span class="value" id="stat-cost">—</span>
-          <span class="foot" id="stat-cost-m2"></span>
+      <div class="workspace-head">
+        <div>
+          <span class="eyebrow" id="run-eyebrow">Generated operating intent</span>
+          <h2 id="outcome-heading" tabindex="-1">Day plan <span id="run-date"></span></h2>
+          <p id="run-summary">Review the projected outcome and the verifier evidence.</p>
         </div>
-        <div class="card stat">
-          <span class="label">Crop growth</span>
-          <span class="value" id="stat-growth">—</span>
-          <span class="foot" id="stat-band"></span>
-        </div>
-        <div class="card stat" id="card-violations">
-          <span class="label">Limit violations</span>
-          <span class="value" id="stat-violations">—</span>
-          <span class="foot" id="stat-projected"></span>
+        <div class="workspace-head-actions">
+          <span id="freshness-chip" class="status-chip status-fresh">Current</span>
+          <button id="show-comparison" class="button button-ghost" type="button">Open comparison</button>
         </div>
       </div>
 
-      <div class="card" id="verdict-card">
-        <h3>Verdict <span id="verdict-badge" class="badge"></span></h3>
-        <pre id="verdict-text"></pre>
-        <p class="muted small" id="verdict-note"></p>
+      <div id="context-strip" class="context-strip" aria-label="Study context">
+        <span><small>Scenario</small><strong id="context-scenario">—</strong></span>
+        <span><small>Scale</small><strong id="context-scale">—</strong></span>
+        <span><small>Period</small><strong id="context-period">—</strong></span>
+        <span><small>Data</small><strong id="context-data">—</strong></span>
+        <span><small>Plan ID</small><strong id="context-fingerprint" class="mono">—</strong></span>
       </div>
 
-      <!-- ------------------------------------------------ approve / edit -->
-      <div class="card">
+      <section class="metric-grid" aria-label="Projected day outcome">
+        <article class="metric-card metric-cost">
+          <div class="metric-top"><span class="metric-icon" aria-hidden="true">€</span><span class="metric-label">Net energy cost</span></div>
+          <strong class="metric-value" id="stat-cost">—</strong>
+          <span class="metric-foot" id="stat-cost-m2">—</span>
+        </article>
+        <article class="metric-card metric-crop">
+          <div class="metric-top"><span class="metric-icon" aria-hidden="true">◒</span><span class="metric-label">Crop growth</span></div>
+          <strong class="metric-value" id="stat-growth">—</strong>
+          <span class="metric-foot" id="stat-band">—</span>
+        </article>
+        <article class="metric-card" id="card-violations">
+          <div class="metric-top"><span class="metric-icon" aria-hidden="true">✓</span><span class="metric-label">Hard violations</span></div>
+          <strong class="metric-value" id="stat-violations">—</strong>
+          <span class="metric-foot" id="stat-projected">—</span>
+        </article>
+        <article class="metric-card metric-grid-status">
+          <div class="metric-top"><span class="metric-icon" aria-hidden="true">↕</span><span class="metric-label">Peak headroom</span></div>
+          <strong class="metric-value" id="stat-headroom">—</strong>
+          <span class="metric-foot" id="stat-peak">—</span>
+        </article>
+      </section>
+
+      <section id="verdict-card" class="verdict-card" aria-labelledby="verdict-heading">
+        <div id="verdict-symbol" class="verdict-symbol" aria-hidden="true">✓</div>
+        <div class="verdict-main">
+          <span class="eyebrow">Deterministic safety case</span>
+          <h3 id="verdict-heading">Verdict <span id="verdict-badge" class="status-chip"></span></h3>
+          <p id="verdict-lead"></p>
+          <div id="verdict-facts" class="verdict-facts"></div>
+          <details id="verdict-details" class="verdict-details">
+            <summary>View checker evidence</summary>
+            <pre id="verdict-text"></pre>
+          </details>
+          <div id="violation-list" class="violation-list"></div>
+          <p class="supporting" id="verdict-note"></p>
+        </div>
+      </section>
+
+      <section class="panel profile-panel" aria-labelledby="profile-heading">
         <div class="panel-head">
-          <h3>The plan</h3>
-          <span class="muted small">Edit any cell, then re-verify before deciding.</span>
+          <div>
+            <span class="eyebrow">24-hour pattern</span>
+            <h3 id="profile-heading">Price, demand and grid position</h3>
+          </div>
+          <div class="legend" aria-label="Chart legend">
+            <span><i class="legend-line price"></i>Price</span>
+            <span><i class="legend-area demand"></i>Heat need</span>
+            <span><i class="legend-bar grid"></i>Grid import</span>
+            <span><i class="legend-limit"></i>Contract limit</span>
+          </div>
         </div>
-        <div class="tablewrap">
+        <div id="profile-chart" class="profile-chart" role="img"
+             aria-label="Hourly profile chart" aria-describedby="profile-summary"></div>
+        <div id="profile-summary" class="sr-only"></div>
+        <div class="intent-lanes-wrap" aria-label="Hourly asset intent">
+          <div id="intent-lanes" class="intent-lanes"></div>
+        </div>
+      </section>
+
+      <section class="split-grid">
+        <article class="panel" aria-labelledby="moments-heading">
+          <div class="panel-head">
+            <div><span class="eyebrow">Operator brief</span><h3 id="moments-heading">Key moments</h3></div>
+          </div>
+          <div id="key-moments" class="key-moments"></div>
+        </article>
+        <article class="panel" aria-labelledby="cost-heading">
+          <div class="panel-head">
+            <div><span class="eyebrow">Cost composition</span><h3 id="cost-heading">What drives the day</h3></div>
+          </div>
+          <div id="cost-breakdown" class="cost-breakdown"></div>
+        </article>
+      </section>
+
+      <section class="panel schedule-panel" aria-labelledby="schedule-heading">
+        <div class="panel-head schedule-head">
+          <div>
+            <span class="eyebrow">Editable intent</span>
+            <h3 id="schedule-heading">Hourly schedule</h3>
+            <p class="supporting">Select an hour to inspect or change the planner’s intent.</p>
+          </div>
+          <div class="schedule-tools">
+            <span id="edit-count" class="status-chip status-neutral">No edits</span>
+            <button id="revert-edits" class="button button-ghost button-small" type="button" disabled>Revert all</button>
+            <button id="reverify" class="button button-secondary button-small" type="button" disabled>Re-verify edits</button>
+          </div>
+        </div>
+        <div class="tablewrap" tabindex="0" aria-label="Editable hourly intent table">
           <table id="plan">
             <thead>
               <tr>
-                <th>Hour</th><th>Price</th><th>Heat need</th>
-                <th>Heat from</th><th>Lamps</th><th>Battery</th><th>CHP</th><th>CO₂</th>
-                <th>Why</th>
+                <th scope="col">Hour</th>
+                <th scope="col">Market</th>
+                <th scope="col">Grid</th>
+                <th scope="col">Heat source</th>
+                <th scope="col">Lighting</th>
+                <th scope="col">Battery</th>
+                <th scope="col">CHP</th>
+                <th scope="col">CO₂</th>
+                <th scope="col">Planner rationale</th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
+      </section>
 
-        <div class="decide">
-          <button id="reverify" type="button" disabled>Re-verify edits</button>
-          <span class="spacer"></span>
-          <input id="comment" type="text" placeholder="Comment (optional)" />
-          <button id="reject" type="button">Reject</button>
-          <button id="approve" type="button" class="primary">Approve</button>
+      <section id="decision-card" class="decision-card" aria-labelledby="decision-heading">
+        <div class="decision-copy">
+          <span class="eyebrow">Human gate</span>
+          <h3 id="decision-heading">Record a decision for this plan</h3>
+          <p id="decision-note">Approval is available only for the exact plan and settings shown above.</p>
         </div>
-        <p class="muted small" id="decision-note"></p>
-      </div>
+        <div class="decision-controls">
+          <label for="comment">Decision note <span>(optional)</span></label>
+          <div class="decision-row">
+            <input id="comment" type="text" maxlength="2000" placeholder="Add context for the audit trail">
+            <button id="reject" type="button" class="button button-danger">Reject</button>
+            <button id="approve" type="button" class="button button-primary">Record approval</button>
+          </div>
+        </div>
+      </section>
 
-      <details class="card">
-        <summary>Energy detail</summary>
-        <table id="metrics"></table>
+      <details class="panel provenance-panel">
+        <summary>Study context, provenance and all metrics</summary>
+        <div class="provenance-grid">
+          <div><h4>Interpretation</h4><p id="period-note"></p><p id="model-note"></p></div>
+          <div><h4>Run metrics</h4><table id="metrics"><tbody></tbody></table></div>
+        </div>
       </details>
     </div>
 
-    <!-- ---------------------------------------------------- comparison -->
-    <div id="comparison" class="card" hidden>
-      <h3>All planners, identical scenario</h3>
-      <div class="tablewrap">
-        <table id="compare-table">
-          <thead>
-            <tr>
-              <th>Planner</th><th>Cost</th><th>Violations</th>
-              <th>Growth</th><th>In band</th><th>Peak import</th><th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+    <section id="comparison" class="comparison-view" hidden aria-labelledby="comparison-heading">
+      <div class="workspace-head">
+        <div>
+          <span class="eyebrow">Paired experiment</span>
+          <h2 id="comparison-heading" tabindex="-1">Same day. Different control conditions.</h2>
+          <p>Cost is shown beside safety and crop outcomes—never as a standalone winner.</p>
+        </div>
+        <button id="comparison-back" class="button button-ghost" type="button">← Back to plan</button>
       </div>
-      <p class="muted small">
-        Same day, same greenhouse, same limits. Only the planner changes.
-      </p>
-    </div>
-
+      <div id="compare-status" class="comparison-status" role="status"></div>
+      <div id="compare-cards" class="compare-cards"></div>
+      <div class="panel comparison-table-panel">
+        <div class="tablewrap" tabindex="0">
+          <table id="compare-table">
+            <thead>
+              <tr>
+                <th scope="col">Condition</th><th scope="col">Verifier</th>
+                <th scope="col">Net cost</th><th scope="col">Hard violations</th>
+                <th scope="col">Growth</th><th scope="col">Crop band</th>
+                <th scope="col">Peak import</th><th scope="col">Interpretation</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </section>
 </main>
 
 <footer>
-  <span id="model-note"></span>
+  <span>KasFlex · WUR · 4TU.NIRICT</span>
+  <span>Simulation research interface · No operational control</span>
 </footer>
 
 <script src="/app.js"></script>

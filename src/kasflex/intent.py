@@ -13,6 +13,7 @@ experiment measures the planner and not the low-level controller (KasFlex R7-R10
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -66,7 +67,11 @@ class IntervalIntent:
     reasoning: str = ""
 
     def __post_init__(self) -> None:
-        if not isinstance(self.hour, int) or not 0 <= self.hour < HOURS_PER_DAY:
+        if (
+            not isinstance(self.hour, int)
+            or isinstance(self.hour, bool)
+            or not 0 <= self.hour < HOURS_PER_DAY
+        ):
             raise IntentSchemaError(f"hour must be an int in 0..23, got {self.hour!r}")
         if self.heat_source not in HEAT_SOURCES:
             raise IntentSchemaError(
@@ -75,8 +80,7 @@ class IntervalIntent:
             )
         if self.battery not in BATTERY_ACTIONS:
             raise IntentSchemaError(
-                f"hour {self.hour}: battery must be one of {BATTERY_ACTIONS}, "
-                f"got {self.battery!r}"
+                f"hour {self.hour}: battery must be one of {BATTERY_ACTIONS}, got {self.battery!r}"
             )
         if self.chp_mode not in CHP_MODES:
             raise IntentSchemaError(
@@ -87,11 +91,35 @@ class IntervalIntent:
                 f"hour {self.hour}: co2_source must be one of {CO2_SOURCES}, "
                 f"got {self.co2_source!r}"
             )
-        if not 0.0 <= float(self.lighting_level) <= 1.0:
+        try:
+            lighting = float(self.lighting_level)
+        except (TypeError, ValueError) as exc:
+            raise IntentSchemaError(
+                f"hour {self.hour}: lighting_level must be a finite number, "
+                f"got {self.lighting_level!r}"
+            ) from exc
+        if isinstance(self.lighting_level, bool) or not math.isfinite(lighting):
+            raise IntentSchemaError(
+                f"hour {self.hour}: lighting_level must be a finite number, "
+                f"got {self.lighting_level!r}"
+            )
+        if not 0.0 <= lighting <= 1.0:
             raise IntentSchemaError(
                 f"hour {self.hour}: lighting_level must be in [0, 1], got {self.lighting_level!r}"
             )
-        if float(self.battery_power_kw) < 0.0:
+        try:
+            battery_power = float(self.battery_power_kw)
+        except (TypeError, ValueError) as exc:
+            raise IntentSchemaError(
+                f"hour {self.hour}: battery_power_kw must be a finite number, "
+                f"got {self.battery_power_kw!r}"
+            ) from exc
+        if isinstance(self.battery_power_kw, bool) or not math.isfinite(battery_power):
+            raise IntentSchemaError(
+                f"hour {self.hour}: battery_power_kw must be a finite number, "
+                f"got {self.battery_power_kw!r}"
+            )
+        if battery_power < 0.0:
             raise IntentSchemaError(
                 f"hour {self.hour}: battery_power_kw must be non-negative "
                 f"(direction is carried by `battery`), got {self.battery_power_kw!r}"
@@ -122,14 +150,12 @@ class Plan:
     def __post_init__(self) -> None:
         if len(self.intervals) != HOURS_PER_DAY:
             raise IntentSchemaError(
-                f"a plan must contain exactly {HOURS_PER_DAY} intervals, "
-                f"got {len(self.intervals)}"
+                f"a plan must contain exactly {HOURS_PER_DAY} intervals, got {len(self.intervals)}"
             )
         hours = [iv.hour for iv in self.intervals]
         if hours != list(range(HOURS_PER_DAY)):
             raise IntentSchemaError(
-                "plan intervals must cover hours 0..23 exactly once, in order; "
-                f"got {hours}"
+                f"plan intervals must cover hours 0..23 exactly once, in order; got {hours}"
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -170,12 +196,14 @@ class Plan:
                 raise IntentSchemaError(f"interval {i}: hour is not an integer") from exc
             for numeric in ("lighting_level", "battery_power_kw"):
                 if numeric in payload:
+                    if isinstance(payload[numeric], bool):
+                        raise IntentSchemaError(f"interval {i}: {numeric} is not a number")
                     try:
                         payload[numeric] = float(payload[numeric])
                     except (TypeError, ValueError) as exc:
-                        raise IntentSchemaError(
-                            f"interval {i}: {numeric} is not a number"
-                        ) from exc
+                        raise IntentSchemaError(f"interval {i}: {numeric} is not a number") from exc
+                    if not math.isfinite(payload[numeric]):
+                        raise IntentSchemaError(f"interval {i}: {numeric} must be finite")
             intervals.append(IntervalIntent(**payload))
 
         return cls(
@@ -202,9 +230,7 @@ class Plan:
 
         if not 0 <= hour < HOURS_PER_DAY:
             raise IntentSchemaError(f"hour must be in 0..23, got {hour}")
-        edited = tuple(
-            replace(iv, **changes) if iv.hour == hour else iv for iv in self.intervals
-        )
+        edited = tuple(replace(iv, **changes) if iv.hour == hour else iv for iv in self.intervals)
         return replace(self, intervals=edited, revision=self.revision + 1)
 
 
