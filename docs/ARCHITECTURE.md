@@ -1,20 +1,27 @@
 # Architecture
 
-KasFlex is a thin, well-tested coordination layer around models other people have
-already validated. Almost everything in this document is about *seams*: where our
-code stops and someone else's begins, and why each boundary sits where it does.
+KasFlex is a thin coordination layer around external models. Its bundled surrogate
+is unvalidated, and the GreenLight-Gym2 configuration has not yet been validated
+against the AGC measurements for this experiment. Almost everything in this
+document is about *seams*: where our code stops and someone else's begins, and why
+each boundary sits where it does.
 
 ## The one-paragraph version
 
-An AI planner sees a **forecast** and proposes one day of **hourly energy intent**.
-A deterministic **safety checker** verifies that intent against electrical, asset
-and crop limits and, on rejection, hands back a machine-readable reason. A
-**person** approves, edits or rejects. A deterministic **low-level controller**
-turns the accepted intent into actuator setpoints, which **GreenLight-Gym2** runs as
-greenhouse physics while the **KasFlex energy hub** dispatches the battery, CHP,
-boiler, buffer, PV and grid connection. The day is then replayed against what
-**actually** happened and audited with every check enabled. That audit is the
-measurement.
+Any planner sees a **forecast** and proposes one day of **hourly energy intent**.
+A deterministic **safety checker** tests that intent against electrical, asset and
+projected crop limits and, on rejection, hands back a machine-readable reason. In the
+core runner, a **person** approves, edits or rejects; an edit is re-simulated on the
+forecast and re-verified, and a rejected decision—or, when verification is enabled,
+an unsafe edit—falls back to the rule-based plan. A deterministic **low-level
+controller** turns the selected intent
+into actuator setpoints, which the greenhouse model runs while the **KasFlex energy
+hub** records both requested and physically applied flows for the battery, CHP,
+boiler, buffer, PV and grid connection. The selected plan is then replayed against a
+separate **realised series** and audited with every check enabled. In the default
+experiment that series is a synthetic perturbation; the daily path can use an
+Open-Meteo historical proxy, not measured KNMI data. That audit is the apparatus's
+measurement. None of these steps operates physical equipment.
 
 ## Diagram
 
@@ -24,7 +31,7 @@ rather than to deliver now.
 
 ```mermaid
 flowchart TB
-    subgraph DATA["DATA — downloaded once, checksummed, offline at run time"]
+    subgraph DATA["REGISTERED DATA PATH — cache/fetch scaffold; not the default experiment input"]
         direction LR
         FCAST["Open-Meteo<br/>archived <b>forecast</b>"]
         PRICE["ENTSO-E day-ahead<br/>+ TTF gas"]
@@ -94,13 +101,22 @@ flowchart TB
     class LOG,METER store
 ```
 
-Green is KasFlex. Blue is someone else's validated code or data. Orange is the
-person. Grey dashed is phase 2.
+Green is KasFlex. Blue is an external model or data source; the colour does not
+claim validation for this use case. Orange is the person. Grey dashed is phase 2.
 
-The block above renders on GitHub. The same diagram is also checked in as
+The diagram shows the core runner's ordering and the intended research protocol.
+The current browser interface is more limited: it uses an automatic internal
+approver to compute a complete simulated preview, then records the person's review
+of that preview. A one-use server token binds approval to the exact verified plan
+and scenario settings, but pressing *Approve* does not start or gate simulation.
+This is suitable for a local research demonstrator, not an operational control
+surface.
+
+The block above renders on GitHub and its source is
+[`architecture.mmd`](architecture.mmd). The checked-in
 [`architecture.svg`](architecture.svg) and [`architecture.png`](architecture.png)
-for use in slides and papers; regenerate both from
-[`architecture.mmd`](architecture.mmd) with `make diagram`.
+predate the final provenance wording; run `make diagram` before reusing those
+exports in a slide or paper.
 
 ## Where this comes from
 
@@ -113,11 +129,12 @@ single-site design has to be able to grow into them, not because they ship now.
 
 The single most important change from that figure is that **safety is not a
 sidecar**. In the proposal the safety layer sits beside the agents and validates
-their actions. Here it sits *between* the planner and everything downstream: no
-intent reaches the low-level controller without a verdict, and the verdict is
-produced by pure, deterministic code that has no dependency on the planner at all.
-That is what makes "violations with the checker off versus on" a measurement rather
-than an assertion.
+their actions. Here every intent passes through a checker interface whose verdict
+is produced by pure, deterministic code with no dependency on the planner.
+Checker-enabled arms gate simulated execution; the explicitly designated
+unverified arm proceeds so its realised violations can be measured. That makes
+"violations with the checker off versus on" an apparatus check rather than an
+assertion.
 
 ## The seams, and why each one is where it is
 
@@ -130,26 +147,31 @@ second is the one that matters for the experiment:
 1. A language model cannot act reliably at a 15-minute control resolution.
 2. If the baseline planned actuators while the LLM planned intent, the experiment
    would measure the low-level controller, not the planner. So the rule-based
-   baseline and the MPC reference emit the *same* structure. The GreenLight
-   rule-based controller still runs, but underneath, as the thing that turns
-   accepted intent into setpoints.
+   baseline and the MPC reference emit the *same* structure. When the separately
+   installed GreenLight worker is selected, its rule-based layer sits underneath
+   as the thing that turns selected intent into setpoints.
 
-### Checker to dispatch: dispatch never repairs a bad plan
+### Checker to dispatch: requested and applied flows stay separate
 
-`dispatch_plan` carries out an infeasible request as written and records the
-resulting out-of-bounds state. Clipping an over-discharge to the battery floor
-would quietly fix bad plans, and the "checker disabled" column of the headline
-table would read zero for the wrong reason. Feasibility is the checker's job.
+`dispatch_plan` keeps two tracks. Fields containing `requested` preserve the
+unsaturated storage request and counterfactual state that the checker evaluates.
+The unqualified fields are physically applied flows and states: they respect power
+and C-rate limits, inventory floors, capacity and headroom. Cost, grid exchange,
+delivered heat and conservation use this applied track.
 
-The one exception is a genuinely physical limit: a full heat buffer cannot accept
-more heat however hard the CHP pushes, so surplus is dumped and reported. The plan
-never asked to overfill the buffer — that is a consequence of a CHP setpoint, not a
-request — so capping it hides nothing the checker should have caught.
+This avoids two equally misleading outcomes. Saturating the only recorded track
+would hide an unsafe request and make the checker-disabled arm look clean. Applying
+the request literally would create energy from an empty battery or a negative heat
+buffer. The checker therefore decides whether the **request** is feasible while
+dispatch remains physically coherent. Saturation is not acceptance: the requested
+trajectory remains available to produce the violation. Heat that a full buffer
+cannot accept is dumped and reported.
 
 ### Hard versus projected violations
 
-A contract breach or an out-of-bounds state of charge is arithmetic. A predicted
-indoor temperature is a forward model's guess, and inherits that model's error.
+A contract breach or a requested state of charge outside its bounds is arithmetic.
+A predicted indoor temperature is a forward model's guess, and inherits that
+model's error.
 The checker reports the two separately, and by default only the arithmetic ones
 reject a plan. Rejecting on a projection would attribute the greenhouse model's
 error to the planner and quietly turn a modelling artefact into a safety result.
@@ -179,6 +201,31 @@ YAML file does, including the rejection of unknown keys. An interface able to se
 field the config parser would refuse is an interface that can produce runs nobody
 can reproduce from a file.
 
+Every generated or re-verified browser plan receives a one-use decision token tied
+to its plan/settings fingerprint; only a checker-enabled, accepted plan also gets
+an approval token. Editing a plan or changing a scenario invalidates both browser
+capabilities. The endpoint independently checks the token, overrides and
+fingerprint, so a stale plan cannot be approved or rejected under a different
+snapshot. Re-verification recalculates the forecast projection, verdict, dispatch
+preview and metrics together.
+
+The token store is global and in memory, with no user sessions, authentication or
+durable review state. Concurrent users can invalidate one another's token and a
+restart loses it. More importantly, the current browser has already completed the
+actual-day simulation before it records the decision. These are deliberate limits
+of a localhost, single-user research interface; they would be blockers for any
+operational deployment.
+
+### Human edits and fallback in the core runner
+
+An edited plan is re-simulated against the forecast and passed through the checker
+again. If verification is enabled and the edit is rejected, or if the person
+rejects the plan, that plan never reaches the core runner's actual-day simulation.
+The runner substitutes and verifies the rule-based baseline, records both the
+failed edit and the fallback event, and returns the fallback verdict with the run.
+This preserves the evidence about the rejected edit without reporting its verdict
+as if it described the plan that was ultimately simulated.
+
 ### The realised audit is independent of the condition under test
 
 After execution, the day is audited by a checker with **every** check enabled,
@@ -194,7 +241,7 @@ table would measure nothing.
 | `kasflex.checker.rules` | The named, individually switchable checks. |
 | `kasflex.checker.verdict` | Machine-readable rejections and planner feedback. |
 | `kasflex.energy.assets` | Asset models and limits, in explicit units. |
-| `kasflex.energy.dispatch` | Deterministic intent-to-flows, faithful to the plan. |
+| `kasflex.energy.dispatch` | Physically bounded applied flows plus unsaturated requested trajectories for checking. |
 | `kasflex.controllers.*` | Rule-based, naive fixture, learned, LLM, MPC (stage 5). |
 | `kasflex.controllers.scheduler` | Learned planner: forecast plus local-search scheduler. |
 | `kasflex.forecast.*` | Demand model, features, history construction, backtesting. |
@@ -206,8 +253,8 @@ table would measure nothing.
 | `kasflex.data.synthetic` | Deterministic offline fallback, weather and prices. |
 | `kasflex.data.sources` | ENTSO-E and Open-Meteo fetchers; parsers pure and testable. |
 | `kasflex.data.pipeline` | The daily job: cache-first, offline-safe, idempotent. |
-| `kasflex.oversight` | Approval, edits, append-only audit log. |
-| `kasflex.ui.server` | Local JSON API over the same functions the CLI uses. |
+| `kasflex.oversight` | Core-runner approval, edits and append-only audit log. |
+| `kasflex.ui.server` | Local preview/re-verification API, one-use approval tokens and decision logging. |
 | `kasflex.ui.static` | The single page: settings, plan, approval, comparison. |
 | `kasflex.resources` | Where files live when frozen into an executable. |
 | `kasflex.run` | One scenario, end to end, to one result record. |

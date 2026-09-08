@@ -61,10 +61,12 @@ class DataCache:
     def _load_manifest(self) -> dict[str, dict[str, Any]]:
         if not self.manifest_path.exists():
             return {}
-        return json.loads(self.manifest_path.read_text())
+        return json.loads(self.manifest_path.read_text(encoding="utf-8"))
 
     def _save_manifest(self, manifest: dict[str, dict[str, Any]]) -> None:
-        self.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        self.manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     def entries(self) -> dict[str, CacheEntry]:
         return {k: CacheEntry(**v) for k, v in self._load_manifest().items()}
@@ -117,7 +119,7 @@ class DataCache:
 
         if fmt == "csv":
             path = self.root / f"{key}.csv"
-            with path.open("w", newline="") as fh:
+            with path.open("w", newline="", encoding="utf-8") as fh:
                 writer = csv.DictWriter(fh, fieldnames=columns)
                 writer.writeheader()
                 writer.writerows(rows)
@@ -156,10 +158,7 @@ class DataCache:
         """
         manifest = self._load_manifest()
         if key not in manifest:
-            raise KeyError(
-                f"{key!r} is not in the cache manifest. "
-                f"Available: {sorted(manifest)}"
-            )
+            raise KeyError(f"{key!r} is not in the cache manifest. Available: {sorted(manifest)}")
         entry = CacheEntry(**manifest[key])
         path = self.root / entry.filename
         if not path.exists():
@@ -179,10 +178,8 @@ class DataCache:
             import pyarrow.parquet as pq  # noqa: PLC0415
 
             return pq.read_table(path).to_pylist()
-        with path.open(newline="") as fh:
-            return [
-                {k: _coerce(v) for k, v in row.items()} for row in csv.DictReader(fh)
-            ]
+        with path.open(newline="", encoding="utf-8") as fh:
+            return [{k: _coerce(v) for k, v in row.items()} for row in csv.DictReader(fh)]
 
 
 def _coerce(value: str) -> Any:

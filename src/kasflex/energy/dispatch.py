@@ -7,14 +7,15 @@ no randomness.
 
 One design decision matters more than any other in this module:
 
-    **Dispatch never silently clips an infeasible request.**
+    **Dispatch keeps requested and physically applied storage trajectories apart.**
 
-If a plan asks the battery to discharge past its floor, or asks the grid for more
-than the contract allows, dispatch carries out the request as written and records
-the resulting out-of-bounds state. Clipping here would quietly repair bad plans and
-the checker would have nothing left to catch -- which would destroy the very
-measurement KasFlex exists to make (violations with the checker disabled versus
-enabled). Feasibility is the checker's job, not dispatch's.
+Battery and heat-buffer requests are advanced without saturation in explicit
+``*_requested_*`` fields, so an infeasible plan remains visible to the checker.
+The unqualified flow and state fields describe what the plant can physically apply:
+rates, usable inventory and storage headroom are enforced there, so dispatch never
+creates energy or moves a store outside its operating envelope. Contractual and
+operational feasibility is still the checker's decision; physical saturation must
+not masquerade as an accepted plan.
 """
 
 from __future__ import annotations
@@ -55,7 +56,12 @@ class HourlyConditions:
 
 @dataclass(frozen=True)
 class IntervalDispatch:
-    """Realised flows and state for one hour. All power values in kW, energy in kWh."""
+    """Applied and requested flows for one hour; power is kW and energy is kWh.
+
+    Unqualified storage fields are physically applied values. Fields containing
+    ``requested`` preserve the unsaturated counterfactual trajectory used by the
+    checker to diagnose an infeasible intent.
+    """
 
     hour: int
     lighting_kw: float
@@ -67,9 +73,14 @@ class IntervalDispatch:
     buffer_charge_kw: float
     buffer_discharge_kw: float
     buffer_level_kwh: float
+    buffer_discharge_requested_kw: float
+    buffer_level_requested_kwh: float
     battery_charge_kw: float
     battery_discharge_kw: float
     battery_soc_kwh: float
+    battery_charge_requested_kw: float
+    battery_discharge_requested_kw: float
+    battery_soc_requested_kwh: float
     grid_import_kw: float
     grid_export_kw: float
     gas_input_kw: float
@@ -80,6 +91,10 @@ class IntervalDispatch:
     heat_dumped_kw: float
     dli_contribution_mol_m2: float
     chp_running: bool
+    grid_import_cost_eur: float
+    market_revenue_eur: float
+    gas_cost_eur: float
+    co2_cost_eur: float
     energy_cost_eur: float
     """Net cost for the hour: gas plus grid import, minus export revenue, plus liquid CO2."""
 
@@ -107,8 +122,20 @@ class DispatchResult:
 
     @property
     def gas_cost_eur(self) -> float:
-        # Recomputed from flows so the split always reconciles with the total.
-        return sum(iv.gas_input_kw for iv in self.intervals) * self._mean_gas_price
+        return sum(iv.gas_cost_eur for iv in self.intervals)
+
+    @property
+    def market_revenue_eur(self) -> float:
+        """Revenue from exported electricity, reported separately for R5."""
+        return sum(iv.market_revenue_eur for iv in self.intervals)
+
+    @property
+    def grid_import_cost_eur(self) -> float:
+        return sum(iv.grid_import_cost_eur for iv in self.intervals)
+
+    @property
+    def co2_cost_eur(self) -> float:
+        return sum(iv.co2_cost_eur for iv in self.intervals)
 
     @property
     def total_dli_mol_m2(self) -> float:
@@ -134,6 +161,10 @@ class DispatchResult:
         return {
             "net_cost_eur": round(self.total_cost_eur, 2),
             "net_cost_eur_per_m2": round(self.total_cost_eur / area, 5),
+            "grid_import_cost_eur": round(self.grid_import_cost_eur, 2),
+            "gas_cost_eur": round(self.gas_cost_eur, 2),
+            "market_revenue_eur": round(self.market_revenue_eur, 2),
+            "co2_cost_eur": round(self.co2_cost_eur, 2),
             "peak_import_kw": round(self.peak_import_kw, 2),
             "peak_export_kw": round(self.peak_export_kw, 2),
             "grid_import_kwh": round(sum(iv.grid_import_kw for iv in self.intervals), 2),
@@ -176,17 +207,21 @@ def _chp_setpoint_kw(hub: EnergyHub, mode: str, heat_demand_kw: float, previous_
 
 @dataclass(frozen=True)
 class HubState:
-    """Carried state between hours: what the storage holds and what the CHP is doing."""
+    """Applied plant state plus the counterfactual requested storage state."""
 
     battery_soc_kwh: float
+    battery_soc_requested_kwh: float
     buffer_level_kwh: float
+    buffer_level_requested_kwh: float
     prev_chp_electrical_kw: float
 
     @classmethod
     def initial(cls, hub: EnergyHub) -> HubState:
         return cls(
             battery_soc_kwh=hub.battery.soc_init_kwh,
+            battery_soc_requested_kwh=hub.battery.soc_init_kwh,
             buffer_level_kwh=hub.buffer.level_init_kwh,
+            buffer_level_requested_kwh=hub.buffer.level_init_kwh,
             prev_chp_electrical_kw=(
                 hub.chp.electrical_capacity_kw if hub.chp.initially_running else 0.0
             ),
@@ -211,7 +246,9 @@ def dispatch_hour(
         The hour's realised flows, and the state to carry into the next hour.
     """
     soc = state.battery_soc_kwh
+    requested_soc = state.battery_soc_requested_kwh
     buffer_level = state.buffer_level_kwh
+    requested_buffer_level = state.buffer_level_requested_kwh
     prev_chp_kw = state.prev_chp_electrical_kw
 
     lighting_kw = hub.lighting_kw(intent.lighting_level)
@@ -223,6 +260,7 @@ def dispatch_hour(
     heat_demand = max(0.0, cond.heat_demand_kw)
 
     boiler_kw = 0.0
+    buffer_discharge_requested_kw = 0.0
     buffer_discharge_kw = 0.0
     heat_from_chp_kw = 0.0
 
@@ -234,42 +272,84 @@ def dispatch_hour(
         boiler_kw = min(hub.boiler.thermal_capacity_kw, remaining)
         remaining -= boiler_kw
     elif intent.heat_source == "buffer":
-        # Requested as asked, up to the buffer's power rating. Whether the
-        # resulting level is legal is the checker's call.
-        buffer_discharge_kw = min(hub.buffer.max_discharge_kw, heat_demand)
-        remaining = heat_demand - buffer_discharge_kw
+        buffer_discharge_requested_kw = min(hub.buffer.max_discharge_kw, heat_demand)
+        remaining = heat_demand - buffer_discharge_requested_kw
         boiler_kw = min(hub.boiler.thermal_capacity_kw, remaining)
         remaining -= boiler_kw
     else:  # "boiler"
         boiler_kw = min(hub.boiler.thermal_capacity_kw, heat_demand)
         remaining = heat_demand - boiler_kw
 
-    heat_delivered = heat_from_chp_kw + boiler_kw + buffer_discharge_kw
-
     # CHP heat the greenhouse did not take is stored, and dumped if it will not
     # fit. Both the charge *rate* and the remaining *volume* bind here: a full
-    # tank cannot accept heat however fast you push it. This is a physical
-    # limit, not a feasibility judgement -- the plan never asked to overfill the
-    # buffer, the surplus is a consequence of the CHP setpoint -- so capping it
-    # here does not hide anything the checker should have caught. Heat that
-    # cannot be stored is dumped to the ambient and reported, because running a
-    # CHP to dump its heat is exactly the kind of waste an operator wants to see.
+    # tank cannot accept heat however fast you push it. The applied buffer path
+    # therefore respects inventory and headroom, while the requested path below
+    # remains unsaturated on discharge so the checker can see an attempted draw
+    # through the floor. Heat that cannot be stored is dumped to the ambient and
+    # reported, because running a CHP to dump its heat is exactly the kind of
+    # waste an operator wants to see.
     after_losses = buffer_level * (1.0 - hub.buffer.standing_loss_frac_per_hour)
+    requested_after_losses = requested_buffer_level * (1.0 - hub.buffer.standing_loss_frac_per_hour)
+    available_buffer_kwh = max(0.0, after_losses - hub.buffer.level_min_kwh)
+    buffer_discharge_kw = min(buffer_discharge_requested_kw, available_buffer_kwh)
     surplus_chp_heat = max(0.0, chp_heat_kw - heat_from_chp_kw)
+    buffer_charge_requested_kw = min(surplus_chp_heat, hub.buffer.max_charge_kw)
     headroom_kwh = max(0.0, hub.buffer.level_max_kwh - after_losses + buffer_discharge_kw)
-    buffer_charge_kw = min(surplus_chp_heat, hub.buffer.max_charge_kw, headroom_kwh)
+    buffer_charge_kw = min(buffer_charge_requested_kw, headroom_kwh)
     heat_dumped_kw = surplus_chp_heat - buffer_charge_kw
 
     buffer_level = after_losses + buffer_charge_kw - buffer_discharge_kw
+    requested_buffer_level = (
+        requested_after_losses + buffer_charge_kw - buffer_discharge_requested_kw
+    )
+    heat_delivered = heat_from_chp_kw + boiler_kw + buffer_discharge_kw
 
     # --- Electrical side -------------------------------------------------
-    battery_charge_kw = intent.battery_power_kw if intent.battery == "charge" else 0.0
-    battery_discharge_kw = intent.battery_power_kw if intent.battery == "discharge" else 0.0
+    # First advance the unsaturated request for verification. Then compute the
+    # physically applied flow from the battery's rate, C-rate, inventory and
+    # headroom. Keeping both paths prevents saturation from hiding a bad plan
+    # without allowing that plan to create or destroy energy in realised totals.
+    battery_charge_requested_kw = intent.battery_power_kw if intent.battery == "charge" else 0.0
+    battery_discharge_requested_kw = (
+        intent.battery_power_kw if intent.battery == "discharge" else 0.0
+    )
+    requested_soc = (
+        requested_soc
+        + battery_charge_requested_kw * hub.battery.charge_efficiency
+        - (
+            battery_discharge_requested_kw / hub.battery.discharge_efficiency
+            if hub.battery.discharge_efficiency > 0
+            else 0.0
+        )
+    )
+    charge_headroom_kw = (
+        max(0.0, hub.battery.soc_max_kwh - soc) / hub.battery.charge_efficiency
+        if hub.battery.charge_efficiency > 0
+        else 0.0
+    )
+    discharge_available_kw = (
+        max(0.0, soc - hub.battery.soc_min_kwh) * hub.battery.discharge_efficiency
+    )
+    battery_charge_kw = min(
+        battery_charge_requested_kw,
+        hub.battery.max_charge_kw,
+        hub.battery.c_rate_power_kw,
+        charge_headroom_kw,
+    )
+    battery_discharge_kw = min(
+        battery_discharge_requested_kw,
+        hub.battery.max_discharge_kw,
+        hub.battery.c_rate_power_kw,
+        discharge_available_kw,
+    )
     soc = (
         soc
         + battery_charge_kw * hub.battery.charge_efficiency
-        - (battery_discharge_kw / hub.battery.discharge_efficiency
-           if hub.battery.discharge_efficiency > 0 else 0.0)
+        - (
+            battery_discharge_kw / hub.battery.discharge_efficiency
+            if hub.battery.discharge_efficiency > 0
+            else 0.0
+        )
     )
 
     elec_demand_kw = hub.base_load_kw + lighting_kw + battery_charge_kw
@@ -292,12 +372,11 @@ def dispatch_hour(
 
     # --- Costs -----------------------------------------------------------
     gas_input_kw = hub.boiler.gas_input_kw(boiler_kw) + hub.chp.gas_input_kw(chp_e_kw)
-    cost = (
-        gas_input_kw * cond.gas_price_eur_kwh
-        + grid_import_kw * cond.power_price_eur_kwh
-        - grid_export_kw * cond.export_price
-        + co2_liquid * 0.30  # liquid CO2, EUR/kg
-    )
+    gas_cost = gas_input_kw * cond.gas_price_eur_kwh
+    grid_import_cost = grid_import_kw * cond.power_price_eur_kwh
+    market_revenue = grid_export_kw * cond.export_price
+    co2_cost = co2_liquid * 0.30  # liquid CO2, EUR/kg
+    cost = gas_cost + grid_import_cost - market_revenue + co2_cost
 
     interval = IntervalDispatch(
         hour=intent.hour,
@@ -310,9 +389,14 @@ def dispatch_hour(
         buffer_charge_kw=buffer_charge_kw,
         buffer_discharge_kw=buffer_discharge_kw,
         buffer_level_kwh=buffer_level,
+        buffer_discharge_requested_kw=buffer_discharge_requested_kw,
+        buffer_level_requested_kwh=requested_buffer_level,
         battery_charge_kw=battery_charge_kw,
         battery_discharge_kw=battery_discharge_kw,
         battery_soc_kwh=soc,
+        battery_charge_requested_kw=battery_charge_requested_kw,
+        battery_discharge_requested_kw=battery_discharge_requested_kw,
+        battery_soc_requested_kwh=requested_soc,
         grid_import_kw=grid_import_kw,
         grid_export_kw=grid_export_kw,
         gas_input_kw=gas_input_kw,
@@ -323,12 +407,18 @@ def dispatch_hour(
         heat_dumped_kw=heat_dumped_kw,
         dli_contribution_mol_m2=hub.hourly_dli_mol_m2(intent.lighting_level),
         chp_running=chp_e_kw > 0.0,
+        grid_import_cost_eur=grid_import_cost,
+        market_revenue_eur=market_revenue,
+        gas_cost_eur=gas_cost,
+        co2_cost_eur=co2_cost,
         energy_cost_eur=cost,
     )
 
     return interval, HubState(
         battery_soc_kwh=soc,
+        battery_soc_requested_kwh=requested_soc,
         buffer_level_kwh=buffer_level,
+        buffer_level_requested_kwh=requested_buffer_level,
         prev_chp_electrical_kw=chp_e_kw,
     )
 
@@ -346,16 +436,16 @@ def dispatch_plan(
         conditions: 24 hourly condition records, ordered by hour.
 
     Returns:
-        A :class:`DispatchResult` whose intervals may contain out-of-bounds states.
-        Feasibility is decided by :mod:`kasflex.checker`, not here.
+        A :class:`DispatchResult` containing physically applied flows alongside
+        unsaturated requested storage trajectories. The applied states remain
+        inside the hub's operating envelope; :mod:`kasflex.checker` decides whether
+        the corresponding request was feasible.
 
     Raises:
         ValueError: if ``conditions`` does not supply exactly one record per hour.
     """
     if len(conditions) != len(plan.intervals):
-        raise ValueError(
-            f"expected {len(plan.intervals)} hourly conditions, got {len(conditions)}"
-        )
+        raise ValueError(f"expected {len(plan.intervals)} hourly conditions, got {len(conditions)}")
 
     state = HubState.initial(hub)
 

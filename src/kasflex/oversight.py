@@ -45,8 +45,7 @@ class HumanDecision:
 
 @runtime_checkable
 class Approver(Protocol):
-    def review(self, plan: Plan, verdict: Verdict) -> HumanDecision:
-        ...
+    def review(self, plan: Plan, verdict: Verdict) -> HumanDecision: ...
 
 
 @dataclass
@@ -100,13 +99,17 @@ class AuditLog:
             "operator": "anonymous" if self.anonymous else operator,
             "payload": payload,
         }
-        with self.path.open("a") as fh:
+        with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, sort_keys=True, default=str) + "\n")
 
     def entries(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
-        return [json.loads(line) for line in self.path.read_text().splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
 
 @dataclass
@@ -121,9 +124,7 @@ class OperatorBrief:
     def render(self) -> str:
         parts = [self.text] if self.text else []
         if self.price_ceiling_eur_kwh is not None:
-            parts.append(
-                f"Do not buy power above {self.price_ceiling_eur_kwh:.3f} EUR/kWh."
-            )
+            parts.append(f"Do not buy power above {self.price_ceiling_eur_kwh:.3f} EUR/kWh.")
         if self.light_target_mol_m2 is not None:
             parts.append(f"Aim for {self.light_target_mol_m2:.1f} mol/m2 of supplemental light.")
         parts.extend(self.events)

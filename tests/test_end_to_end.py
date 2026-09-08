@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from kasflex.adapters.greenhouse import SurrogateGreenhouse
 from kasflex.checker.rules import CheckerConfig
 from kasflex.config import ScenarioConfig
 from kasflex.controllers.naive import NaivePlanner
@@ -17,7 +18,8 @@ from kasflex.controllers.rule_based import RuleBasedPlanner
 from kasflex.data.synthetic import synthetic_day
 from kasflex.energy.assets import EnergyHub
 from kasflex.experiment import ExperimentMatrix, summarise
-from kasflex.oversight import AuditLog
+from kasflex.intent import flat_plan
+from kasflex.oversight import AuditLog, CallbackApprover, Decision, HumanDecision
 from kasflex.run import run_scenario
 
 
@@ -76,6 +78,67 @@ def test_revision_loop_falls_back_after_max_revisions():
     assert result.revisions_used == 2
 
 
+def test_unsafe_human_edit_is_reverified_and_never_executed(tmp_path):
+    """A human edit is not a waiver of an enabled safety check."""
+    day = synthetic_day("2023-01-15", seed=5)
+    hub = EnergyHub()
+    unsafe_edit = flat_plan(
+        "2023-01-15",
+        planner="operator-edit",
+        heat_source="boiler",
+        lighting_level=0.63,
+        battery="discharge",
+        battery_power_kw=hub.battery.max_discharge_kw,
+        co2_source="liquid",
+    )
+    actual_executions = []
+    surrogate = SurrogateGreenhouse()
+
+    class RecordingGreenhouse:
+        name = "recording-surrogate"
+
+        def simulate_day(self, plan, conditions, floor_area_m2):
+            if conditions is day.actual:
+                actual_executions.append(plan)
+            return surrogate.simulate_day(plan, conditions, floor_area_m2)
+
+    log = AuditLog(tmp_path / "audit.jsonl")
+    result = run_scenario(
+        scenario="unsafe-edit",
+        date="2023-01-15",
+        hub=hub,
+        forecast=day.forecast,
+        actual=day.actual,
+        planner=RuleBasedPlanner(),
+        greenhouse=RecordingGreenhouse(),
+        checker_config=CheckerConfig(enabled=True),
+        approver=CallbackApprover(
+            lambda _plan, _verdict: HumanDecision(
+                decision=Decision.EDIT,
+                plan=unsafe_edit,
+                comment="unsafe test edit",
+            )
+        ),
+        audit_log=log,
+        seed=5,
+    )
+
+    entries = log.entries()
+    reverified = next(entry for entry in entries if entry["kind"] == "reverified_after_edit")
+    assert reverified["payload"]["verdict"]["accepted"] is False
+    fallback = next(entry for entry in entries if entry["kind"] == "human_rejected_using_baseline")
+
+    assert result.human_decision == Decision.EDIT.value
+    assert result.accepted is False
+    assert result.fell_back_to_baseline
+    assert result.verdict.accepted is True
+    assert result.plan.planner == "rule-based"
+    assert result.plan != unsafe_edit
+    assert fallback["payload"]["fallback_verdict"] == result.verdict.to_dict()
+    assert actual_executions == [result.plan]
+    assert unsafe_edit not in actual_executions
+
+
 def test_audit_uses_all_checks_even_when_one_is_excluded(tmp_path):
     """The audit must ignore the condition under test, or an unverified run scores clean."""
     day = synthetic_day("2023-01-15", seed=5)
@@ -104,8 +167,14 @@ def test_audit_log_is_append_only_and_records_the_whole_run(tmp_path):
     _run(NaivePlanner(), enabled=True, audit=log)
     entries = log.entries()
     kinds = [e["kind"] for e in entries]
-    for expected in ("run_started", "plan_proposed", "verdict", "human_decision",
-                     "realised_audit", "run_finished"):
+    for expected in (
+        "run_started",
+        "plan_proposed",
+        "verdict",
+        "human_decision",
+        "realised_audit",
+        "run_finished",
+    ):
         assert expected in kinds, f"{expected} missing from the audit log"
 
     before = len(entries)

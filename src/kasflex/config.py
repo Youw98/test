@@ -83,7 +83,7 @@ class ScenarioConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> ScenarioConfig:
         """Load a scenario from a YAML file."""
-        text = Path(path).read_text()
+        text = Path(path).read_text(encoding="utf-8")
         data = yaml.safe_load(text) or {}
         if not isinstance(data, dict):
             raise ConfigError(f"{path}: top level must be a mapping")
@@ -119,8 +119,16 @@ class ScenarioConfig:
             crop=_build(CropLimits, hub_data.get("crop"), f"{where}.hub.crop"),
         )
         leftover = set(hub_data) - {
-            "floor_area_m2", "lamp_power_w_m2", "lamp_ppfd_umol_m2_s", "base_load_kw",
-            "battery", "chp", "boiler", "buffer", "pv", "crop",
+            "floor_area_m2",
+            "lamp_power_w_m2",
+            "lamp_ppfd_umol_m2_s",
+            "base_load_kw",
+            "battery",
+            "chp",
+            "boiler",
+            "buffer",
+            "pv",
+            "crop",
         }
         if leftover:
             raise ConfigError(f"{where}.hub: unknown key(s) {sorted(leftover)}")

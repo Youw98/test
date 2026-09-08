@@ -18,6 +18,7 @@ from kasflex.data.sources import (
     DstDayError,
     FetchError,
     local_day_bounds,
+    openmeteo_source_for,
     parse_entsoe_day_ahead,
     parse_openmeteo_hourly,
 )
@@ -149,6 +150,16 @@ def test_negative_irradiance_is_clamped(openmeteo_json):
     payload = json.loads(openmeteo_json)
     payload["hourly"]["shortwave_radiation"][3] = -5.0
     assert parse_openmeteo_hourly(payload, DAY)[3]["irradiance_w_m2"] == 0.0
+
+
+def test_past_forecast_uses_the_historical_forecast_dataset():
+    assert openmeteo_source_for(DAY).dataset_key == "openmeteo_hist_forecast"
+
+
+def test_future_forecast_and_historical_weather_keep_distinct_provenance():
+    future = dt.date(9999, 1, 1)
+    assert openmeteo_source_for(future).dataset_key == "openmeteo_forecast"
+    assert openmeteo_source_for(future, archive=True).dataset_key == "openmeteo_archive"
 
 
 # --- time ------------------------------------------------------------------

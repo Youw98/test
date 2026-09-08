@@ -18,8 +18,9 @@ Design constraints, in the order they mattered:
 
    The HTTP layer in this module has **not** been exercised against the live
    services, because the build environment's egress policy blocks
-   ``api.open-meteo.com``, ``archive-api.open-meteo.com`` and
-   ``web-api.tp.entsoe.eu``. The parsers, the caching, the retry logic and
+   ``api.open-meteo.com``, ``historical-forecast-api.open-meteo.com``,
+   ``archive-api.open-meteo.com`` and ``web-api.tp.entsoe.eu``. The parsers,
+   the caching, the retry logic and
    everything downstream are covered by tests against recorded responses. The
    request construction is written from the published API contracts and should be
    confirmed against the real services on first use -- run
@@ -49,6 +50,7 @@ ENTSOE_NL_ZONE = "10YNL----------L"
 """EIC code for the Dutch bidding zone."""
 
 OPENMETEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
+OPENMETEO_HISTORICAL_FORECAST = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 OPENMETEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 
 # Westland, the Dutch glasshouse cluster the scenarios are built around.
@@ -88,13 +90,32 @@ ENTSOE_META = SourceMeta(
 OPENMETEO_FORECAST_META = SourceMeta(
     source=OPENMETEO_FORECAST,
     licence="CC-BY 4.0 (Open-Meteo free tier)",
+    dataset_key="openmeteo_forecast",
+)
+OPENMETEO_HISTORICAL_FORECAST_META = SourceMeta(
+    source=OPENMETEO_HISTORICAL_FORECAST,
+    licence="CC-BY 4.0 (Open-Meteo free tier)",
     dataset_key="openmeteo_hist_forecast",
 )
 OPENMETEO_ARCHIVE_META = SourceMeta(
     source=OPENMETEO_ARCHIVE,
     licence="CC-BY 4.0 (Open-Meteo free tier)",
-    dataset_key="knmi_hourly",
+    dataset_key="openmeteo_archive",
 )
+
+
+def openmeteo_source_for(day: Date, *, archive: bool = False) -> SourceMeta:
+    """Return metadata for the endpoint that can represent ``day``.
+
+    Future and current dates use the live forecast API. Past dates use the
+    historical-forecast host, rather than asking the live endpoint for data it does
+    not retain. ``archive=True`` selects the historical-weather proxy explicitly.
+    """
+    if archive:
+        return OPENMETEO_ARCHIVE_META
+    if day < Date.today():
+        return OPENMETEO_HISTORICAL_FORECAST_META
+    return OPENMETEO_FORECAST_META
 
 
 # --------------------------------------------------------------------------
@@ -228,10 +249,7 @@ def parse_entsoe_day_ahead(xml_text: str, day: Date) -> list[dict[str, float]]:
         )
 
     if root_tag == "Acknowledgement_MarketDocument":
-        reasons = [
-            (e.findtext("./{*}text") or "").strip()
-            for e in root.findall(".//{*}Reason")
-        ]
+        reasons = [(e.findtext("./{*}text") or "").strip() for e in root.findall(".//{*}Reason")]
         raise FetchError(
             "ENTSO-E returned an acknowledgement rather than data"
             + (f": {'; '.join(r for r in reasons if r)}" if any(reasons) else "")
@@ -271,7 +289,7 @@ def parse_entsoe_day_ahead(xml_text: str, day: Date) -> list[dict[str, float]]:
     rows: list[dict[str, float]] = []
     last = by_position[min(by_position)]
     for hour in range(HOURS):
-        last = by_position.get(hour + 1, last)   # positions are 1-based
+        last = by_position.get(hour + 1, last)  # positions are 1-based
         rows.append({"hour": hour, "price_eur_kwh": round(last / 1000.0, 6)})
     return rows
 
@@ -383,10 +401,10 @@ def fetch_openmeteo(
     """Fetch hourly weather for a local calendar day.
 
     Args:
-        archive: When True, read the historical archive -- what actually happened.
-            When False, read the forecast. These are two different requirements,
-            not alternatives: the planner sees the forecast and results are scored
-            against the archive (ADR-0005).
+        archive: When True, read the historical Open-Meteo archive as a provisional
+            realised-weather proxy. When False, read the forecast. The archive is
+            not KNMI measured weather and does not satisfy that data requirement;
+            its provenance remains distinct (ADR-0005).
 
     Raises:
         FetchError: on transport or parsing failure.
@@ -399,5 +417,5 @@ def fetch_openmeteo(
         "end_date": day.isoformat(),
         "timezone": "Europe/Amsterdam",
     }
-    url = OPENMETEO_ARCHIVE if archive else OPENMETEO_FORECAST
+    url = openmeteo_source_for(day, archive=archive).source
     return parse_openmeteo_hourly(http_get(url, params, **http_kwargs), day)

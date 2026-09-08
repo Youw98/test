@@ -19,7 +19,7 @@ from kasflex.data.pipeline import cached_days, ensure_day, run_daily
 from kasflex.data.sources import (
     ENTSOE_META,
     OPENMETEO_ARCHIVE_META,
-    OPENMETEO_FORECAST_META,
+    OPENMETEO_HISTORICAL_FORECAST_META,
     FetchError,
     parse_entsoe_day_ahead,
     parse_openmeteo_hourly,
@@ -35,16 +35,29 @@ def seed(cache: DataCache, *, actuals: bool = True) -> None:
     """Put a full day in the cache, exactly as a successful fetch would have."""
     prices = parse_entsoe_day_ahead((FIXTURES / "entsoe_a44_sparse.xml").read_text(), DAY)
     weather = parse_openmeteo_hourly((FIXTURES / "openmeteo_forecast.json").read_text(), DAY)
-    cache.put("entsoe_da_2023-01-15", prices, source=ENTSOE_META.source,
-              licence=ENTSOE_META.licence, dataset_key="entsoe_da")
-    cache.put(f"weather_forecast_2023-01-15_{SITE}", weather,
-              source=OPENMETEO_FORECAST_META.source,
-              licence=OPENMETEO_FORECAST_META.licence, dataset_key="openmeteo_hist_forecast")
+    cache.put(
+        "entsoe_da_2023-01-15",
+        prices,
+        source=ENTSOE_META.source,
+        licence=ENTSOE_META.licence,
+        dataset_key="entsoe_da",
+    )
+    cache.put(
+        f"weather_forecast_2023-01-15_{SITE}",
+        weather,
+        source=OPENMETEO_HISTORICAL_FORECAST_META.source,
+        licence=OPENMETEO_HISTORICAL_FORECAST_META.licence,
+        dataset_key="openmeteo_hist_forecast",
+    )
     if actuals:
         warmer = [{**r, "outdoor_temp_c": r["outdoor_temp_c"] + 0.8} for r in weather]
-        cache.put(f"weather_actual_2023-01-15_{SITE}", warmer,
-                  source=OPENMETEO_ARCHIVE_META.source,
-                  licence=OPENMETEO_ARCHIVE_META.licence, dataset_key="knmi_hourly")
+        cache.put(
+            f"weather_actual_2023-01-15_{SITE}",
+            warmer,
+            source=OPENMETEO_ARCHIVE_META.source,
+            licence=OPENMETEO_ARCHIVE_META.licence,
+            dataset_key="openmeteo_archive",
+        )
 
 
 @pytest.fixture
@@ -57,9 +70,7 @@ def cache(tmp_path) -> DataCache:
 @pytest.fixture
 def config(tmp_path):
     base = ScenarioConfig.from_yaml("configs/scenario_westland_winter.yaml")
-    return ScenarioConfig(
-        **{**base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")}
-    )
+    return ScenarioConfig(**{**base.__dict__, "audit_path": str(tmp_path / "audit.jsonl")})
 
 
 # --- cache behaviour -------------------------------------------------------
@@ -130,9 +141,7 @@ def test_fetches_only_what_is_missing(tmp_path, monkeypatch):
 
     def fake_openmeteo(day, *, latitude, longitude, archive=False, **kw):
         calls.append(archive)
-        return parse_openmeteo_hourly(
-            (FIXTURES / "openmeteo_forecast.json").read_text(), day
-        )
+        return parse_openmeteo_hourly((FIXTURES / "openmeteo_forecast.json").read_text(), day)
 
     monkeypatch.setattr("kasflex.data.pipeline.fetch_openmeteo", fake_openmeteo)
     data = ensure_day(DAY, cache=partial, latitude=LAT, longitude=LON, allow_network=True)
@@ -156,6 +165,7 @@ def test_a_fetched_series_is_cached_with_provenance(tmp_path, monkeypatch):
 
     entry = partial.entries()[f"weather_actual_2023-01-15_{SITE}"]
     assert entry.licence.startswith("CC-BY")
+    assert entry.dataset_key == "openmeteo_archive"
     assert entry.retrieved_on
     assert entry.sha256
 
@@ -191,7 +201,11 @@ def test_daily_run_appends_one_record(config, cache, tmp_path):
     record = run_daily(config, DAY, cache=cache, allow_network=False, results_path=out)
     assert record["date"] == "2023-01-15"
     assert record["actuals_available"] is True
-    assert record["provenance"]["data_source"] == "live"
+    assert record["provenance"]["data_source"] == "external"
+    assert record["provenance"]["forecast_weather_dataset"] == "openmeteo_hist_forecast"
+    assert record["provenance"]["scoring_weather_dataset"] == "openmeteo_archive"
+    assert record["provenance"]["scoring_weather_is_measured"] is False
+    assert record["provenance"]["scored_against"] == "historical_weather_proxy"
     assert len(out.read_text().strip().splitlines()) == 1
 
 
@@ -207,15 +221,19 @@ def test_daily_run_is_idempotent(config, cache, tmp_path):
 def test_daily_run_marks_a_forecast_only_score(config, tmp_path):
     partial = DataCache(tmp_path / "p")
     seed(partial, actuals=False)
-    record = run_daily(config, DAY, cache=partial, allow_network=False,
-                       results_path=tmp_path / "d.jsonl")
+    record = run_daily(
+        config, DAY, cache=partial, allow_network=False, results_path=tmp_path / "d.jsonl"
+    )
     assert record["actuals_available"] is False
+    assert record["provenance"]["scored_against"] == "forecast"
+    assert record["provenance"]["scoring_weather_dataset"] is None
     assert "forecast" in record["note"]
 
 
 def test_daily_run_records_where_each_series_came_from(config, cache, tmp_path):
-    record = run_daily(config, DAY, cache=cache, allow_network=False,
-                       results_path=tmp_path / "d.jsonl")
+    record = run_daily(
+        config, DAY, cache=cache, allow_network=False, results_path=tmp_path / "d.jsonl"
+    )
     assert record["series_origin"]["prices"] == "cache"
 
 

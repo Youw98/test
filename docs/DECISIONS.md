@@ -146,18 +146,30 @@ codebase; a type that simply does not carry the actuals will.
 the planner a heat-demand profile to reason about, and again on the actuals to
 execute. Cheap, and the alternative is an oracle.
 
+**Current evidence limit.** Here `actual` names the structurally separate scoring
+series; it does not certify a measured source. The default experiment uses a
+synthetic perturbation and the daily path currently uses an Open-Meteo historical
+proxy. KNMI measured-weather ingestion remains unimplemented.
+
 ---
 
-## ADR-0006 — Dispatch is faithful; only the checker decides feasibility
+## ADR-0006 — Preserve the unsafe request; apply only physical flows
 
-**Decision.** `dispatch_plan` carries out infeasible requests as written and records
-the out-of-bounds result. It clips only genuinely physical limits — a full heat
-buffer cannot accept more heat — and reports what was dumped.
+**Decision.** `dispatch_plan` records two storage trajectories. Explicit
+`*_requested_*` fields advance the unsaturated counterfactual requested by the
+plan, so the checker can see power, state-of-charge and heat-buffer violations.
+Unqualified fields are what the simulated plant physically applies; they respect
+rate and C-rate limits, available inventory, floors, capacity and headroom. Grid
+exchange, heat delivery, cost and conservation use the applied fields. Heat that a
+full buffer cannot accept is dumped and reported.
 
-**What forced it.** The headline measurement is violations with the checker disabled
-versus enabled. If dispatch clipped an over-discharge to the battery floor, the
-disabled column would read zero and the experiment would measure nothing. A test
-asserts this directly (`test_dispatch_does_not_clip_infeasible_requests`).
+**What forced it.** The headline measurement is violations with the checker
+disabled versus enabled. If the only trajectory were saturated, an over-discharge
+would disappear from the disabled column and the experiment would measure nothing.
+If the simulated plant applied it literally, an empty battery or buffer would
+supply impossible energy. Keeping both tracks makes the unsafe request observable
+without making the physics incoherent. The conservation and checker regression is
+`test_storage_conservation_keeps_requested_infeasibility_visible`.
 
 ---
 
@@ -205,6 +217,12 @@ nothing physically. The mitigation is that it is labelled everywhere it appears,
 that stage 1 replaces it. **No figure computed with the surrogate may be published**,
 and `provenance.greenhouse_validated` is in every result record so that this can be
 checked mechanically rather than remembered.
+
+Synthetic input data are a separate limitation from the surrogate model. Real
+weather and prices do not validate an unvalidated greenhouse model, and running a
+validated model on synthetic weather would still not create an empirical result.
+Both the input provenance and `greenhouse_validated` flag must therefore accompany
+any number.
 
 ---
 

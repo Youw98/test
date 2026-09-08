@@ -92,7 +92,7 @@ class TraceStore:
         if self._index is None:
             index: dict[str, RecordedTrace] = {}
             if self.path.exists():
-                for line in self.path.read_text().splitlines():
+                for line in self.path.read_text(encoding="utf-8").splitlines():
                     if line.strip():
                         index[json.loads(line)["key"]] = RecordedTrace(**json.loads(line))
             self._index = index
@@ -102,7 +102,7 @@ class TraceStore:
         return self._load().get(key)
 
     def append(self, trace: RecordedTrace) -> None:
-        with self.path.open("a") as fh:
+        with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(trace.__dict__, sort_keys=True) + "\n")
         self._load()[trace.key] = trace
 

@@ -48,8 +48,7 @@ DATASETS: dict[str, DatasetRef] = {
             kind="measurement",
             source="https://doi.org/10.4121/uuid:88d22c60-21b3-4ea8-90db-20249a5be2a7",
             licence=(
-                "See 4TU.ResearchData landing page (CC-BY family); "
-                "confirm before redistribution"
+                "See 4TU.ResearchData landing page (CC-BY family); confirm before redistribution"
             ),
             phase="mvp",
             access="Manual download from 4TU.ResearchData; place under data/raw/agc2/",
@@ -88,9 +87,19 @@ DATASETS: dict[str, DatasetRef] = {
             phase="mvp",
             access="KNMI open data API or the hourly-records download",
             notes=(
-                "What actually happened. Results are evaluated against this. Never shown "
-                "to the planner -- see ADR-0005."
+                "Required measured-weather source for valid out-of-sample scoring. "
+                "Ingestion is not implemented yet; never shown to the planner -- ADR-0005."
             ),
+        ),
+        DatasetRef(
+            key="openmeteo_forecast",
+            title="Open-Meteo current weather forecast",
+            kind="forecast",
+            source="https://api.open-meteo.com/v1/forecast",
+            licence="CC-BY 4.0 (Open-Meteo free tier)",
+            phase="daily-provisional",
+            access="HTTP API, no key required for the free tier",
+            notes="Used for current and future daily runs; cached before planning.",
         ),
         DatasetRef(
             key="openmeteo_hist_forecast",
@@ -104,6 +113,19 @@ DATASETS: dict[str, DatasetRef] = {
                 "What was *believed* at planning time. This is what the planner sees. "
                 "The archive does not reach back to the 2019-2020 AGC period, which is "
                 "the reason for the two-period rule in ADR-0004."
+            ),
+        ),
+        DatasetRef(
+            key="openmeteo_archive",
+            title="Open-Meteo archive (provisional realised-weather proxy)",
+            kind="historical weather proxy",
+            source="https://archive-api.open-meteo.com/v1/archive",
+            licence="CC-BY 4.0 (Open-Meteo free tier)",
+            phase="mvp-provisional",
+            access="HTTP API, no key required for the free tier",
+            notes=(
+                "Used provisionally by kasflex daily. It is kept distinct from KNMI "
+                "measured weather and must not be described as satisfying D7."
             ),
         ),
         DatasetRef(
@@ -151,10 +173,7 @@ def datasets_for_phase(phase: Phase) -> list[DatasetRef]:
 
 def as_markdown_table() -> str:
     """Render the registry as the provenance table in docs/DATA.md."""
-    header = (
-        "| Key | Dataset | Kind | Phase | Licence | Source |\n"
-        "|---|---|---|---|---|---|\n"
-    )
+    header = "| Key | Dataset | Kind | Phase | Licence | Source |\n|---|---|---|---|---|---|\n"
     rows = "".join(
         f"| `{d.key}` | {d.title} | {d.kind} | {d.phase} | {d.licence} | {d.source} |\n"
         for d in DATASETS.values()

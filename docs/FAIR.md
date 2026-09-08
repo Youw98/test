@@ -33,9 +33,9 @@ them is not worth making.
 
 | | |
 |---|---|
-| **R1** Richly described with accurate attributes | ✅ Every result record carries its full conditions: planner, checker configuration, excluded checks, seed, data source, and whether the greenhouse model was validated. |
+| **R1** Richly described with accurate attributes | 🔶 Result records carry scenario and planner labels, checker configuration, seed, data source, validation state, plan, verdict, realised violations, a hub snapshot and input hashes. They do not embed the complete hourly inputs or requested/applied dispatch trajectories. |
 | **R1.1** Clear and accessible licence | ✅ Apache-2.0 for the core; the AGPL worker is separated and labelled with an SPDX header. See ADR-0001. |
-| **R1.2** Detailed provenance | ✅ Dataset registry, checksummed cache manifest, append-only audit log of plans, verdicts and human decisions. |
+| **R1.2** Detailed provenance | 🔶 Dataset registry, checksummed cache manifest and the core runner's append-only workflow log are present. Real input deposits are absent, and the browser logs final decisions but not each draft edit and re-verification event. |
 | **R1.3** Domain-relevant community standards | 🔶 CITATION.cff and CodeMeta are met. Energy-domain standards (CIM/IEC 61970) are not, and are not obviously worth it at this scale — `power-grid-model`'s own model definition is the de facto standard in the Dutch DSO context. |
 
 ## Reproducibility, concretely
@@ -44,11 +44,13 @@ Beyond FAIR, three properties make a result checkable:
 
 1. **Determinism (R6).** Same seed and configuration, same record, byte for byte.
    Asserted in `tests/test_reproducibility.py`.
-2. **Offline (R30).** No run reads a live API. Asserted by a test that replaces the
-   `socket` module and fails if anything tries to connect.
-3. **Replayable agents (R12).** Every language-model call is recorded and replays
-   exactly, keyed on a hash of the model and the full prompt. A reviewer regenerates
-   the figures with no API key and no spend.
+2. **Offline fixtures (partial R30).** Synthetic runs read no live API. A test
+   replaces the `socket` module and fails if they try to connect. This does not yet
+   prove that the main experiment replays cached external inputs, because that
+   cache is not wired into the main run/UI/experiment paths.
+3. **Replayable agent mechanism (R12).** The trace store keys records on a hash of
+   the model and prompt and can replay without an API. Tests use a fake transport;
+   real multi-model traces have not yet been acquired or deposited.
 
 ## What would make this properly FAIR
 

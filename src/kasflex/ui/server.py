@@ -21,8 +21,10 @@ the CLI uses, so the interface cannot drift from what a scripted run would produ
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import mimetypes
+import secrets
 import threading
 import time
 import traceback
@@ -40,8 +42,10 @@ STATIC_DIR = static_dir()
 
 _FAVICON = (
     b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
-    b'<rect width="16" height="16" rx="3" fill="#2c5f2d"/>'
-    b'<path d="M8 3.2 12.4 7v5.8H3.6V7z" fill="#97bc62"/></svg>'
+    b'<rect width="16" height="16" rx="4" fill="#102a2a"/>'
+    b'<path d="M2.8 8.1 8 3.4l5.2 4.7v4.6H2.8z" fill="none" stroke="#b8f34a" '
+    b'stroke-width="1.4"/><path d="M8 3.4v9.3M4.4 6.7h7.2" stroke="#b8f34a" '
+    b'stroke-width="1"/></svg>'
 )
 
 #: The settings the interface exposes. Everything else stays in the scenario file.
@@ -52,54 +56,151 @@ _FAVICON = (
 #: ``(path, label, kind, minimum, maximum, step, help)`` where ``path`` is a
 #: dotted path into the scenario config.
 ADJUSTABLE: tuple[dict[str, Any], ...] = (
-    {"path": "planner", "label": "Planner", "kind": "choice",
-     "choices": ["rule-based", "learned", "naive", "llm", "mpc"],
-     "help": "Which planner proposes the day. 'learned' forecasts demand and optimises."},
-    {"path": "checker.enabled", "label": "Safety checker", "kind": "bool",
-     "help": "Turn verification off to measure what it is worth. This is the experiment."},
-    {"path": "checker.explain", "label": "Explain rejections", "kind": "bool",
-     "help": "Whether a rejected planner is told why. Separates verification from explanation."},
-    {"path": "checker.max_revisions", "label": "Revisions allowed", "kind": "int",
-     "min": 0, "max": 10, "step": 1,
-     "help": "How many times a planner may revise before the baseline takes over."},
-
+    {
+        "path": "planner",
+        "label": "Planner",
+        "kind": "choice",
+        "choices": ["rule-based", "learned", "naive", "llm", "mpc"],
+        "help": "Which planner proposes the day. 'learned' forecasts demand and optimises.",
+    },
+    {
+        "path": "checker.enabled",
+        "label": "Safety checker",
+        "kind": "bool",
+        "help": "Turn verification off to measure what it is worth. This is the experiment.",
+    },
+    {
+        "path": "checker.explain",
+        "label": "Explain rejections",
+        "kind": "bool",
+        "help": "Whether a rejected planner is told why. Separates verification from explanation.",
+    },
+    {
+        "path": "checker.max_revisions",
+        "label": "Revisions allowed",
+        "kind": "int",
+        "min": 0,
+        "max": 10,
+        "step": 1,
+        "help": "How many times a planner may revise before the baseline takes over.",
+    },
     {"path": "date", "label": "Date", "kind": "text", "help": "The day to simulate."},
-    {"path": "seed", "label": "Seed", "kind": "int", "min": 0, "max": 9999, "step": 1,
-     "help": "Same seed, same day, every time."},
-    {"path": "winter", "label": "Winter conditions", "kind": "bool",
-     "help": "Winter: low light, high heat demand. Summer is the reverse."},
-
-    {"path": "hub.contract.import_limit_kw", "label": "Grid import limit", "kind": "number",
-     "min": 500, "max": 20000, "step": 100, "unit": "kW",
-     "help": "The connection contract. Exceeding it is a hard violation."},
-    {"path": "hub.contract.export_limit_kw", "label": "Grid export limit", "kind": "number",
-     "min": 0, "max": 20000, "step": 100, "unit": "kW",
-     "help": "Feed-in limit. Often lower than import, and zero under a non-firm contract."},
-
-    {"path": "hub.battery.capacity_kwh", "label": "Battery capacity", "kind": "number",
-     "min": 0, "max": 20000, "step": 100, "unit": "kWh"},
-    {"path": "hub.battery.max_charge_kw", "label": "Battery power", "kind": "number",
-     "min": 0, "max": 10000, "step": 50, "unit": "kW",
-     "help": "Applied to both charge and discharge."},
-
-    {"path": "hub.chp.electrical_capacity_kw", "label": "CHP size", "kind": "number",
-     "min": 0, "max": 10000, "step": 100, "unit": "kWe"},
-    {"path": "hub.chp.min_run_hours", "label": "CHP minimum run", "kind": "int",
-     "min": 1, "max": 12, "step": 1, "unit": "h"},
-    {"path": "hub.chp.min_down_hours", "label": "CHP minimum down", "kind": "int",
-     "min": 1, "max": 12, "step": 1, "unit": "h"},
-
-    {"path": "hub.buffer.capacity_kwh", "label": "Heat buffer", "kind": "number",
-     "min": 0, "max": 40000, "step": 500, "unit": "kWh"},
-    {"path": "hub.crop.dli_target_mol_m2", "label": "Light target", "kind": "number",
-     "min": 0, "max": 30, "step": 0.5, "unit": "mol/m2",
-     "help": "Supplemental daily light integral the crop needs."},
-    {"path": "hub.floor_area_m2", "label": "Greenhouse area", "kind": "number",
-     "min": 96, "max": 200000, "step": 1000, "unit": "m2",
-     "help": "Validation runs at 96 m2; scenarios at commercial scale. Do not mix them."},
-
-    {"path": "brief", "label": "Operator brief", "kind": "textarea",
-     "help": "Plain language instruction passed to the planner."},
+    {
+        "path": "seed",
+        "label": "Seed",
+        "kind": "int",
+        "min": 0,
+        "max": 9999,
+        "step": 1,
+        "help": "Same seed, same day, every time.",
+    },
+    {
+        "path": "winter",
+        "label": "Winter conditions",
+        "kind": "bool",
+        "help": "Winter: low light, high heat demand. Summer is the reverse.",
+    },
+    {
+        "path": "hub.contract.import_limit_kw",
+        "label": "Grid import limit",
+        "kind": "number",
+        "min": 500,
+        "max": 20000,
+        "step": 100,
+        "unit": "kW",
+        "help": "The connection contract. Exceeding it is a hard violation.",
+    },
+    {
+        "path": "hub.contract.export_limit_kw",
+        "label": "Grid export limit",
+        "kind": "number",
+        "min": 0,
+        "max": 20000,
+        "step": 100,
+        "unit": "kW",
+        "help": "Feed-in limit. Often lower than import, and zero under a non-firm contract.",
+    },
+    {
+        "path": "hub.battery.capacity_kwh",
+        "label": "Battery capacity",
+        "kind": "number",
+        "min": 0,
+        "max": 20000,
+        "step": 100,
+        "unit": "kWh",
+    },
+    {
+        "path": "hub.battery.max_charge_kw",
+        "label": "Battery power",
+        "kind": "number",
+        "min": 0,
+        "max": 10000,
+        "step": 50,
+        "unit": "kW",
+        "help": "Applied to both charge and discharge.",
+    },
+    {
+        "path": "hub.chp.electrical_capacity_kw",
+        "label": "CHP size",
+        "kind": "number",
+        "min": 0,
+        "max": 10000,
+        "step": 100,
+        "unit": "kWe",
+    },
+    {
+        "path": "hub.chp.min_run_hours",
+        "label": "CHP minimum run",
+        "kind": "int",
+        "min": 1,
+        "max": 12,
+        "step": 1,
+        "unit": "h",
+    },
+    {
+        "path": "hub.chp.min_down_hours",
+        "label": "CHP minimum down",
+        "kind": "int",
+        "min": 1,
+        "max": 12,
+        "step": 1,
+        "unit": "h",
+    },
+    {
+        "path": "hub.buffer.capacity_kwh",
+        "label": "Heat buffer",
+        "kind": "number",
+        "min": 0,
+        "max": 40000,
+        "step": 500,
+        "unit": "kWh",
+    },
+    {
+        "path": "hub.crop.dli_target_mol_m2",
+        "label": "Light target",
+        "kind": "number",
+        "min": 0,
+        "max": 30,
+        "step": 0.5,
+        "unit": "mol/m2",
+        "help": "Supplemental daily light integral the crop needs.",
+    },
+    {
+        "path": "hub.floor_area_m2",
+        "label": "Greenhouse area",
+        "kind": "number",
+        "min": 96,
+        "max": 200000,
+        "step": 1000,
+        "unit": "m2",
+        "help": "Validation runs at 96 m2; scenarios at commercial scale. Do not mix them.",
+    },
+    {
+        "path": "brief",
+        "label": "Operator brief",
+        "kind": "textarea",
+        "help": "Plain language instruction passed to the planner.",
+    },
 )
 
 
@@ -136,9 +237,7 @@ def _coerce(spec: dict[str, Any], value: Any) -> Any:
         elif kind == "choice":
             coerced = str(value)
             if coerced not in spec["choices"]:
-                raise ApiError(
-                    f"{label}: {coerced!r} is not one of {spec['choices']}"
-                )
+                raise ApiError(f"{label}: {coerced!r} is not one of {spec['choices']}")
             return coerced
         else:
             return str(value)
@@ -241,15 +340,16 @@ def _day_for(config: ScenarioConfig):
     )
 
 
-def _conditions_for(config: ScenarioConfig, greenhouse, base):
+def _conditions_for(config: ScenarioConfig, greenhouse, base, plan: Plan | None = None):
     """Attach the greenhouse's heat and CO2 demand to a weather series."""
     from kasflex.controllers.base import PlanningContext
     from kasflex.controllers.rule_based import RuleBasedPlanner
 
-    nominal = RuleBasedPlanner().plan(
-        PlanningContext(date=config.date, forecast=tuple(base), hub=config.hub)
-    )
-    outcome = greenhouse.simulate_day(nominal, tuple(base), config.hub.floor_area_m2)
+    if plan is None:
+        plan = RuleBasedPlanner().plan(
+            PlanningContext(date=config.date, forecast=tuple(base), hub=config.hub)
+        )
+    outcome = greenhouse.simulate_day(plan, tuple(base), config.hub.floor_area_m2)
     return tuple(
         dataclasses.replace(
             c,
@@ -260,9 +360,10 @@ def _conditions_for(config: ScenarioConfig, greenhouse, base):
     ), outcome
 
 
-def _plan_payload(plan: Plan, conditions) -> list[dict[str, Any]]:
-    return [
-        {
+def _plan_payload(plan: Plan, conditions, dispatch=None, contract=None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for i, iv in enumerate(plan.intervals):
+        row: dict[str, Any] = {
             "hour": iv.hour,
             "heat_source": iv.heat_source,
             "lighting_level": iv.lighting_level,
@@ -273,9 +374,54 @@ def _plan_payload(plan: Plan, conditions) -> list[dict[str, Any]]:
             "reasoning": iv.reasoning,
             "power_price_eur_kwh": conditions[i].power_price_eur_kwh,
             "heat_demand_kw": round(conditions[i].heat_demand_kw, 1),
+            "outdoor_temp_c": round(conditions[i].outdoor_temp_c, 1),
+            "irradiance_w_m2": round(conditions[i].irradiance_w_m2, 1),
         }
-        for i, iv in enumerate(plan.intervals)
-    ]
+        if contract is not None:
+            import_limit, export_limit = contract.limits_at(iv.hour)
+            row["import_limit_kw"] = round(import_limit, 1)
+            row["export_limit_kw"] = round(export_limit, 1)
+        if dispatch is not None:
+            realised = dispatch.intervals[i]
+            row.update(
+                {
+                    "grid_import_kw": round(realised.grid_import_kw, 1),
+                    "grid_export_kw": round(realised.grid_export_kw, 1),
+                    "grid_net_kw": round(realised.grid_net_kw, 1),
+                    "battery_soc_kwh": round(realised.battery_soc_kwh, 1),
+                    "buffer_level_kwh": round(realised.buffer_level_kwh, 1),
+                    "energy_cost_eur": round(realised.energy_cost_eur, 2),
+                }
+            )
+        rows.append(row)
+    return rows
+
+
+def _study_context(config: ScenarioConfig) -> dict[str, Any]:
+    """Make the scale and period rules impossible to miss in the interface."""
+    try:
+        year = int(config.date[:4])
+    except (TypeError, ValueError):
+        year = 0
+    research_scale = config.hub.floor_area_m2 <= 150
+    if research_scale and year in {2019, 2020}:
+        design_window = "validation"
+        note = "AGC validation window: research-compartment scale and 2019-2020 data."
+    elif not research_scale and year >= 2022:
+        design_window = "scenario"
+        note = "Commercial scenario window: scaled greenhouse and post-2022 conditions."
+    else:
+        design_window = "mixed"
+        note = "Scale and period do not match either documented study window."
+    return {
+        "area_m2": config.hub.floor_area_m2,
+        "scale": "research compartment" if research_scale else "commercial greenhouse",
+        "period": design_window,
+        "period_note": note,
+        "data_source": config.data_source,
+        "forecast_actual_separated": True,
+        "offline": True,
+    }
 
 
 @dataclass
@@ -286,6 +432,12 @@ class UiServer:
     anonymous: bool = False
     base: ScenarioConfig = field(init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _approval_tokens: dict[str, dict[str, Any]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _decision_tokens: dict[str, dict[str, Any]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.base = ScenarioConfig.from_yaml(self.config_path)
@@ -305,7 +457,49 @@ class UiServer:
             "fields": fields,
         }
 
-    def run(self, overrides: dict[str, Any]) -> dict[str, Any]:
+    def _issue_capabilities(
+        self,
+        plan: Plan,
+        overrides: dict[str, Any],
+        *,
+        accepted: bool,
+        checker_enabled: bool,
+        source: str,
+        replace: bool = True,
+    ) -> tuple[str | None, str, str]:
+        """Issue one-use capabilities tied to this exact plan snapshot.
+
+        The browser disables approval after edits, but that is only a usability
+        guard. Server-side tokens are the actual invariant: only a verified plan can
+        be approved, while every rendered plan can be rejected. Both decisions stay
+        bound to the plan and scenario the operator actually reviewed.
+        """
+        canonical = json.dumps(
+            {"plan": plan.to_dict(), "overrides": overrides},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        approval_token = None
+        decision_token = secrets.token_urlsafe(24)
+        snapshot = {
+            "fingerprint": fingerprint,
+            "source": source,
+            "overrides": dict(overrides),
+            "issued_at": time.time(),
+        }
+        with self._lock:
+            if replace:
+                self._approval_tokens.clear()
+                self._decision_tokens.clear()
+            self._decision_tokens[decision_token] = snapshot
+            if accepted and checker_enabled:
+                approval_token = secrets.token_urlsafe(24)
+                self._approval_tokens[approval_token] = snapshot
+        return approval_token, decision_token, fingerprint
+
+    def run(self, overrides: dict[str, Any], *, issue_approval: bool = True) -> dict[str, Any]:
         """Run one scenario and return everything the page needs to show it."""
         from kasflex.experiment import build_greenhouse, build_planner
         from kasflex.run import run_scenario
@@ -338,8 +532,20 @@ class UiServer:
         except NotImplementedError as exc:
             raise ApiError(str(exc), status=501) from exc
 
-        conditions, _ = _conditions_for(config, greenhouse, day.forecast)
+        conditions, _ = _conditions_for(config, greenhouse, day.forecast, result.plan)
         hard = result.realised_hard_violations
+        approval_token, decision_token, fingerprint = (
+            self._issue_capabilities(
+                result.plan,
+                overrides,
+                accepted=result.verdict.accepted,
+                checker_enabled=result.checker_enabled,
+                source="generated",
+                replace=issue_approval,
+            )
+            if issue_approval
+            else (None, "", "")
+        )
         return {
             "date": result.date,
             "planner": result.planner,
@@ -351,12 +557,18 @@ class UiServer:
             "revisions_used": result.revisions_used,
             "feedback": result.verdict.feedback(explain=config.checker.explain),
             "violations": [v.to_dict() for v in result.verdict.violations],
+            "checks_run": list(result.verdict.checks_run),
+            "checks_excluded": list(result.verdict.checks_excluded),
             "realised_hard": hard,
             "realised_projected": len(result.realised_violations) - hard,
             "metrics": result.metrics,
-            "plan": _plan_payload(result.plan, conditions),
+            "plan": _plan_payload(result.plan, conditions, result.dispatch, config.hub.contract),
             "elapsed_s": round(time.time() - started, 2),
             "overrides": overrides,
+            "context": _study_context(config),
+            "approval_token": approval_token,
+            "decision_token": decision_token,
+            "plan_fingerprint": fingerprint,
         }
 
     def verify(self, overrides: dict[str, Any], plan_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -373,18 +585,17 @@ class UiServer:
         # rejects unknown fields, so strip them here rather than loosening the
         # schema: the strictness is what stops a planner inventing fields.
         intent_fields = set(IntervalIntent.__dataclass_fields__)
-        cleaned = [
-            {k: v for k, v in row.items() if k in intent_fields} for row in plan_rows
-        ]
+        cleaned = [{k: v for k, v in row.items() if k in intent_fields} for row in plan_rows]
         try:
-            plan = Plan.from_dict({"date": config.date, "planner": "human-edited",
-                                   "intervals": cleaned})
+            plan = Plan.from_dict(
+                {"date": config.date, "planner": "human-edited", "intervals": cleaned}
+            )
         except IntentSchemaError as exc:
             raise ApiError(f"edited plan is not valid: {exc}") from exc
 
         day = _day_for(config)
         greenhouse = build_greenhouse(config.greenhouse, config)
-        conditions, outcome = _conditions_for(config, greenhouse, day.forecast)
+        conditions, outcome = _conditions_for(config, greenhouse, day.forecast, plan)
         verdict = SafetyChecker(config.hub, config.checker).verify(
             plan, conditions, outcome.projection()
         )
@@ -392,11 +603,37 @@ class UiServer:
         from kasflex.energy.dispatch import dispatch_plan
 
         dispatch = dispatch_plan(plan, config.hub, list(conditions))
+        metrics = {
+            **dispatch.summary(),
+            "fruit_growth_kg_m2": round(outcome.fruit_growth_kg_m2, 6),
+            "natural_dli_mol_m2": round(outcome.natural_dli_mol_m2, 3),
+            "supplemental_dli_mol_m2": round(dispatch.total_dli_mol_m2, 3),
+            "temperature_band_hours": float(
+                outcome.temperature_band_hours(
+                    config.hub.crop.temp_min_c, config.hub.crop.temp_max_c
+                )
+            ),
+            "heat_dumped_kwh": round(sum(iv.heat_dumped_kw for iv in dispatch.intervals), 2),
+        }
+        approval_token, decision_token, fingerprint = self._issue_capabilities(
+            plan,
+            overrides,
+            accepted=verdict.accepted,
+            checker_enabled=config.checker.enabled,
+            source="human-edited",
+        )
         return {
             "accepted": verdict.accepted,
             "feedback": verdict.feedback(explain=config.checker.explain),
             "violations": [v.to_dict() for v in verdict.violations],
-            "metrics": dispatch.summary(),
+            "checks_run": list(verdict.checks_run),
+            "checks_excluded": list(verdict.checks_excluded),
+            "metrics": metrics,
+            "plan": _plan_payload(plan, conditions, dispatch, config.hub.contract),
+            "context": _study_context(config),
+            "approval_token": approval_token,
+            "decision_token": decision_token,
+            "plan_fingerprint": fingerprint,
         }
 
     def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -404,6 +641,67 @@ class UiServer:
         decision = str(payload.get("decision", "")).lower()
         if decision not in {"approve", "reject", "edit"}:
             raise ApiError("decision must be approve, reject or edit")
+        approval_token = str(payload.get("approval_token", ""))
+        decision_token = str(payload.get("decision_token", ""))
+        decided_snapshot: dict[str, Any] | None = None
+        with self._lock:
+            if decision == "approve":
+                decided_snapshot = self._approval_tokens.pop(approval_token, None)
+                if decided_snapshot is None:
+                    raise ApiError(
+                        "This approval is stale or the plan was not verified. "
+                        "Generate or re-verify the plan before approving."
+                    )
+                if decision_token:
+                    decision_snapshot = self._decision_tokens.pop(decision_token, None)
+                    if decision_snapshot is None:
+                        raise ApiError(
+                            "This decision is stale. Generate or re-verify the plan "
+                            "before deciding."
+                        )
+                    if decision_snapshot["fingerprint"] != decided_snapshot["fingerprint"]:
+                        raise ApiError(
+                            "The decision and approval tokens identify different plans. "
+                            "Generate or re-verify the plan before deciding."
+                        )
+                if payload.get("overrides", {}) != decided_snapshot["overrides"]:
+                    raise ApiError(
+                        "The scenario changed after this plan was verified. "
+                        "Generate or re-verify it under the current settings."
+                    )
+                submitted_fingerprint = payload.get("plan_fingerprint")
+                if (
+                    submitted_fingerprint is not None
+                    and submitted_fingerprint != decided_snapshot["fingerprint"]
+                ):
+                    raise ApiError(
+                        "The plan fingerprint does not match the approved plan snapshot. "
+                        "Generate or re-verify the plan before deciding."
+                    )
+            elif decision == "reject":
+                decided_snapshot = self._decision_tokens.pop(decision_token, None)
+                if decided_snapshot is None:
+                    raise ApiError(
+                        "This rejection is stale or does not identify the current plan. "
+                        "Generate or re-verify the plan before rejecting."
+                    )
+                if payload.get("overrides", {}) != decided_snapshot["overrides"]:
+                    raise ApiError(
+                        "The scenario changed after this plan was generated or verified. "
+                        "Generate or re-verify it under the current settings."
+                    )
+                if payload.get("plan_fingerprint") != decided_snapshot["fingerprint"]:
+                    raise ApiError(
+                        "The plan fingerprint does not match the current plan snapshot. "
+                        "Generate or re-verify the plan before deciding."
+                    )
+            elif decision_token:
+                decided_snapshot = self._decision_tokens.pop(decision_token, None)
+            elif approval_token:
+                decided_snapshot = self._approval_tokens.pop(approval_token, None)
+            # A decision closes the current review; no older plan stays approvable.
+            self._approval_tokens.clear()
+            self._decision_tokens.clear()
         AuditLog(resolve_output(self.base.audit_path), anonymous=self.anonymous).append(
             "human_decision_ui",
             {
@@ -411,6 +709,12 @@ class UiServer:
                 "comment": str(payload.get("comment", ""))[:2000],
                 "seconds_to_decide": payload.get("seconds_to_decide"),
                 "overrides": payload.get("overrides", {}),
+                "plan_fingerprint": (
+                    decided_snapshot.get("fingerprint") if decided_snapshot else None
+                ),
+                "verification_source": (
+                    decided_snapshot.get("source") if decided_snapshot else None
+                ),
             },
             operator=str(payload.get("operator", "")),
         )
@@ -427,7 +731,20 @@ class UiServer:
         return {"rows": rows}
 
     def _compare_row(self, overrides: dict[str, Any], planner: str) -> dict[str, Any]:
-        result = self.run({**overrides, "planner": planner})
+        conditions = {
+            "rule-based": ("rule-based", True),
+            "learned": ("learned", True),
+            "ai-unverified": ("naive", False),
+            "ai-verified": ("naive", True),
+            "mpc": ("mpc", True),
+        }
+        engine, checker_enabled = conditions.get(
+            planner, (planner, bool(overrides.get("checker.enabled", self.base.checker.enabled)))
+        )
+        result = self.run(
+            {**overrides, "planner": engine, "checker.enabled": checker_enabled},
+            issue_approval=False,
+        )
         return {
             "cost_eur": result["metrics"]["net_cost_eur"],
             "cost_eur_per_m2": result["metrics"]["net_cost_eur_per_m2"],
@@ -439,6 +756,8 @@ class UiServer:
             "growth_kg_m2": result["metrics"]["fruit_growth_kg_m2"],
             "fell_back": result["fell_back"],
             "accepted": result["accepted"],
+            "engine": engine,
+            "checker_enabled": checker_enabled,
         }
 
 
@@ -462,7 +781,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, payload: Any, status: int = 200) -> None:
-        self._send(status, json.dumps(payload, default=str).encode(), "application/json")
+        self._send(
+            status,
+            json.dumps(payload, default=str).encode("utf-8"),
+            "application/json; charset=utf-8",
+        )
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -500,8 +823,13 @@ class _Handler(BaseHTTPRequestHandler):
         except ApiError as exc:
             self._json({"error": str(exc)}, exc.status)
         except Exception as exc:  # noqa: BLE001
-            self._json({"error": f"{type(exc).__name__}: {exc}",
-                        "traceback": traceback.format_exc()[-1500:]}, 500)
+            self._json(
+                {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc()[-1500:],
+                },
+                500,
+            )
 
     def do_POST(self) -> None:  # noqa: N802
         try:
@@ -514,17 +842,24 @@ class _Handler(BaseHTTPRequestHandler):
             elif self.path.startswith("/api/decision"):
                 self._json(self.ui.decide(body))
             elif self.path.startswith("/api/compare"):
-                self._json(self.ui.compare(
-                    overrides,
-                    body.get("planners") or ["rule-based", "learned", "naive"],
-                ))
+                self._json(
+                    self.ui.compare(
+                        overrides,
+                        body.get("planners") or ["rule-based", "learned", "naive"],
+                    )
+                )
             else:
                 self._json({"error": f"no such endpoint: {self.path}"}, 404)
         except ApiError as exc:
             self._json({"error": str(exc)}, exc.status)
         except Exception as exc:  # noqa: BLE001
-            self._json({"error": f"{type(exc).__name__}: {exc}",
-                        "traceback": traceback.format_exc()[-1500:]}, 500)
+            self._json(
+                {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc()[-1500:],
+                },
+                500,
+            )
 
 
 def serve(
@@ -534,6 +869,11 @@ def serve(
     anonymous: bool = False,
 ) -> ThreadingHTTPServer:
     """Create the server. The caller decides whether to serve forever."""
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError(
+            "KasFlex UI is a single-user research tool with no authentication; "
+            "it may only bind to localhost."
+        )
     ui = UiServer(config_path=config_path, anonymous=anonymous)
     handler = type("Handler", (_Handler,), {"ui": ui})
     return ThreadingHTTPServer((host, port), handler)

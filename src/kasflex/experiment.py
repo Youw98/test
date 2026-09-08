@@ -80,6 +80,9 @@ def build_planner(name: str, config: ScenarioConfig) -> Planner:
 
         return MpcPlanner()
     if name == "learned":
+        from datetime import date as Date  # noqa: PLC0415
+        from datetime import timedelta  # noqa: PLC0415
+
         from kasflex.controllers.scheduler import LearnedPlanner  # noqa: PLC0415
         from kasflex.data.synthetic import synthetic_history  # noqa: PLC0415
         from kasflex.forecast.history import build_history  # noqa: PLC0415
@@ -87,9 +90,13 @@ def build_planner(name: str, config: ScenarioConfig) -> Planner:
         # The history is the greenhouse's own past demand, produced by the same
         # model the run will execute. Training on anything else forecasts a
         # different greenhouse -- see kasflex.forecast.history.
+        # Training days must end before the target. The old fixed 2023-01-01 start
+        # leaked future synthetic days into early-January scenarios.
+        history_start = Date.fromisoformat(config.date) - timedelta(days=config.history_days)
         weather = synthetic_history(
             config.history_days,
             seed=config.seed + 9_000,
+            start_date=history_start.isoformat(),
             floor_area_m2=config.hub.floor_area_m2,
             winter=config.winter,
         )
@@ -104,9 +111,7 @@ def build_planner(name: str, config: ScenarioConfig) -> Planner:
             model=config.llm_model,
             traces=TraceStore(resolve_output(config.trace_path)),
         )
-    raise ValueError(
-        f"unknown planner {name!r}; available: rule-based, naive, learned, mpc, llm"
-    )
+    raise ValueError(f"unknown planner {name!r}; available: rule-based, naive, learned, mpc, llm")
 
 
 def build_greenhouse(name: str, config: ScenarioConfig) -> GreenhouseModel:
@@ -143,7 +148,7 @@ class ExperimentMatrix:
         audit = AuditLog(resolve_output(self.config.audit_path))
         records: list[dict[str, Any]] = []
 
-        with out.open("w") as fh:
+        with out.open("w", encoding="utf-8") as fh:
             for condition, day_index in self.cells():
                 seed = self.config.seed + day_index
                 day = synthetic_day(
@@ -196,8 +201,7 @@ class ExperimentMatrix:
 def _print_row(record: dict[str, Any]) -> None:
     if record.get("status") == "error":
         print(
-            f"  {record['condition']:<20} day {record['day_index']}  "
-            f"ERROR  {record['error'][:70]}"
+            f"  {record['condition']:<20} day {record['day_index']}  ERROR  {record['error'][:70]}"
         )
         return
     print(
@@ -223,13 +227,9 @@ def summarise(records: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
         summary[label] = {
             "runs": float(n),
             "mean_cost_eur": round(sum(r["net_cost_eur"] for r in rows) / n, 2),
-            "mean_violations": round(
-                sum(r["realised_violations_total"] for r in rows) / n, 2
-            ),
+            "mean_violations": round(sum(r["realised_violations_total"] for r in rows) / n, 2),
             "hard_violations": float(sum(r["realised_violations_hard"] for r in rows)),
-            "fallback_rate": round(
-                sum(1 for r in rows if r["fell_back_to_baseline"]) / n, 3
-            ),
+            "fallback_rate": round(sum(1 for r in rows if r["fell_back_to_baseline"]) / n, 3),
             "mean_peak_import_kw": round(sum(r["peak_import_kw"] for r in rows) / n, 1),
         }
     return summary

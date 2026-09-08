@@ -108,8 +108,8 @@ def _battery_power(ctx: CheckContext) -> list[Violation]:
     out = []
     for iv in ctx.dispatch.intervals:
         for power, rating, direction in (
-            (iv.battery_charge_kw, b.max_charge_kw, "charge"),
-            (iv.battery_discharge_kw, b.max_discharge_kw, "discharge"),
+            (iv.battery_charge_requested_kw, b.max_charge_kw, "charge"),
+            (iv.battery_discharge_requested_kw, b.max_discharge_kw, "discharge"),
         ):
             if power <= 1e-9:
                 continue
@@ -141,14 +141,14 @@ def _battery_soc(ctx: CheckContext) -> list[Violation]:
     b = ctx.hub.battery
     out = []
     for iv in ctx.dispatch.intervals:
-        if iv.battery_soc_kwh < b.soc_min_kwh - 1e-6:
+        if iv.battery_soc_requested_kwh < b.soc_min_kwh - 1e-6:
             out.append(
                 Violation(
                     constraint="battery.state_of_charge",
                     category="electrical",
                     severity=Severity.HARD,
                     hour=iv.hour,
-                    actual=iv.battery_soc_kwh,
+                    actual=iv.battery_soc_requested_kwh,
                     bound=b.soc_min_kwh,
                     unit="kWh",
                     message=(
@@ -157,14 +157,14 @@ def _battery_soc(ctx: CheckContext) -> list[Violation]:
                     ),
                 )
             )
-        elif iv.battery_soc_kwh > b.soc_max_kwh + 1e-6:
+        elif iv.battery_soc_requested_kwh > b.soc_max_kwh + 1e-6:
             out.append(
                 Violation(
                     constraint="battery.state_of_charge",
                     category="electrical",
                     severity=Severity.HARD,
                     hour=iv.hour,
-                    actual=iv.battery_soc_kwh,
+                    actual=iv.battery_soc_requested_kwh,
                     bound=b.soc_max_kwh,
                     unit="kWh",
                     message=(
@@ -186,14 +186,14 @@ def _buffer_level(ctx: CheckContext) -> list[Violation]:
     buf = ctx.hub.buffer
     out = []
     for iv in ctx.dispatch.intervals:
-        if iv.buffer_level_kwh < buf.level_min_kwh - 1e-6:
+        if iv.buffer_level_requested_kwh < buf.level_min_kwh - 1e-6:
             out.append(
                 Violation(
                     constraint="buffer.level_bounds",
                     category="asset",
                     severity=Severity.HARD,
                     hour=iv.hour,
-                    actual=iv.buffer_level_kwh,
+                    actual=iv.buffer_level_requested_kwh,
                     bound=buf.level_min_kwh,
                     unit="kWh",
                     message=(
@@ -202,14 +202,14 @@ def _buffer_level(ctx: CheckContext) -> list[Violation]:
                     ),
                 )
             )
-        elif iv.buffer_level_kwh > buf.level_max_kwh + 1e-6:
+        elif iv.buffer_level_requested_kwh > buf.level_max_kwh + 1e-6:
             out.append(
                 Violation(
                     constraint="buffer.level_bounds",
                     category="asset",
                     severity=Severity.HARD,
                     hour=iv.hour,
-                    actual=iv.buffer_level_kwh,
+                    actual=iv.buffer_level_requested_kwh,
                     bound=buf.level_max_kwh,
                     unit="kWh",
                     message=(
@@ -325,7 +325,8 @@ def _chp_ramp(ctx: CheckContext) -> list[Violation]:
                 else 0.0
             )
             requested = (
-                0.0 if implied <= 0.0
+                0.0
+                if implied <= 0.0
                 else min(chp.electrical_capacity_kw, max(chp.min_load_kw, implied))
             )
         change = abs(requested - previous)
@@ -482,16 +483,26 @@ def _projected_band(
 def _crop_temp(ctx: CheckContext) -> list[Violation]:
     c = ctx.hub.crop
     return _projected_band(
-        ctx, "crop.temperature_band", "temp_c", "air temperature",
-        c.temp_min_c, c.temp_max_c, "degC",
+        ctx,
+        "crop.temperature_band",
+        "temp_c",
+        "air temperature",
+        c.temp_min_c,
+        c.temp_max_c,
+        "degC",
     )
 
 
 @check("crop.humidity")
 def _crop_rh(ctx: CheckContext) -> list[Violation]:
     return _projected_band(
-        ctx, "crop.humidity", "rh_pct", "relative humidity",
-        None, ctx.hub.crop.rh_max_pct, "%",
+        ctx,
+        "crop.humidity",
+        "rh_pct",
+        "relative humidity",
+        None,
+        ctx.hub.crop.rh_max_pct,
+        "%",
     )
 
 
@@ -499,8 +510,13 @@ def _crop_rh(ctx: CheckContext) -> list[Violation]:
 def _crop_co2(ctx: CheckContext) -> list[Violation]:
     c = ctx.hub.crop
     return _projected_band(
-        ctx, "crop.co2", "co2_ppm", "CO2 concentration",
-        c.co2_min_ppm, c.co2_max_ppm, "ppm",
+        ctx,
+        "crop.co2",
+        "co2_ppm",
+        "CO2 concentration",
+        c.co2_min_ppm,
+        c.co2_max_ppm,
+        "ppm",
     )
 
 
@@ -601,9 +617,7 @@ class SafetyChecker:
 
         violations.sort(key=lambda v: (v.hour if v.hour is not None else -1, v.constraint))
         blocking = [
-            v
-            for v in violations
-            if v.severity is Severity.HARD or self.config.fail_on_projected
+            v for v in violations if v.severity is Severity.HARD or self.config.fail_on_projected
         ]
         return Verdict(
             accepted=not blocking,
